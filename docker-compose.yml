@@ -1,0 +1,151 @@
+# =============================================================================
+# Inventory Autopilot - the whole system, two containers
+# =============================================================================
+#
+#   docker compose up -d --build          start
+#   docker compose logs -f app            watch, including the first-run password
+#   docker compose run --rm app alembic upgrade head    apply migrations
+#   docker compose down                   stop
+#
+# THE DASHBOARD IS NOT PUBLISHED TO THE INTERNET.
+# Port 8000 is bound to 127.0.0.1, so it is reachable only from the host. Reach
+# it through a Cloudflare Tunnel, Tailscale, or an SSH tunnel -- see
+# docs/DEPLOYMENT.md. That means there is no public login page for anyone to
+# attack, which is a great deal of security for no effort.
+#
+# To expose it deliberately, change the ports line to "8000:8000" and put a
+# reverse proxy with a TLS certificate in front. Never expose it plain.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # The application: web dashboard and scheduler in one process
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: inventory-autopilot:1.0.0
+    restart: unless-stopped
+
+    env_file: .env
+
+    environment:
+      # Overrides .env so the app always reaches the database container rather
+      # than a localhost address that would only work outside Docker.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-autopilot}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-autopilot}
+
+    ports:
+      # Host-only. See the note at the top of this file.
+      - "127.0.0.1:8000:8000"
+
+    volumes:
+      # Downloaded feeds, generated reports, catalogue snapshots. A named volume
+      # so a container rebuild does not lose them -- the snapshots are what a
+      # restore-to-a-past-day depends on.
+      - autopilot-data:/app/data
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    # Hardening. The application writes only to /app/data and /tmp, so
+    # everything else can be read-only. An attacker who reaches code execution
+    # cannot modify the application itself.
+    read_only: true
+    tmpfs:
+      # Large enough for the 75 MB extracted feed plus working room.
+      - /tmp:size=512M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Sized for the real workload: parsing a 1.15-million-row, 75 MB feed while
+    # PostgreSQL is also running. The parser streams, so this is comfortable
+    # headroom rather than a requirement.
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+    logging:
+      driver: json-file
+      options:
+        # Without a cap, JSON logs on a small VPS eventually fill the disk --
+        # and a full disk stops the sync.
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-autopilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-autopilot}
+      # scram-sha-256 rather than the default md5.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+
+    volumes:
+      - autopilot-db:/var/lib/postgresql/data
+      # Nightly dumps land here. Bind-mounted rather than a named volume so the
+      # host's own backup tooling can pick them up without knowing about Docker.
+      - ./data/backups:/backups
+
+    # NOT published. Only the app container can reach it, over the internal
+    # Docker network. Uncomment for local inspection, then comment it back.
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-autopilot} -d ${POSTGRES_DB:-autopilot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+    security_opt:
+      - no-new-privileges:true
+
+    command:
+      # Tuned for a 2 GB VPS handling bulk upserts of about a million rows.
+      # These are modest, deliberate values rather than defaults: the default
+      # 128 MB shared_buffers and 4 MB work_mem would make the full-feed upsert
+      # spill to disk repeatedly.
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - effective_cache_size=768MB
+      # A bulk upsert produces a lot of WAL; a larger max keeps checkpoints
+      # from firing mid-import.
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - checkpoint_completion_target=0.9
+      # Log anything slower than two seconds. Useful for spotting a missing
+      # index as the tables grow.
+      - -c
+      - log_min_duration_statement=2000
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+volumes:
+  autopilot-data:
+  autopilot-db:
