@@ -1,0 +1,180 @@
+{#
+  Products the vendor has in stock that could not be matched to a listing.
+
+  Two things at once: a queue of things a human might want to fix, and the
+  "New Products" opportunity list the client's team already uses. Nothing here
+  has been sent to Amazon -- being unmatched is exactly why.
+#}
+{% extends "base.html" %}
+
+{% block title %}Unmatched &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Unmatched products{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">
+    {{ total|n }} product{{ 's' if total != 1 }} the vendor has in stock but that are not
+    listed on Amazon
+  </p>
+{% endblock %}
+
+{% block content %}
+
+<div class="md-banner md-banner--info">
+  <span class="md-banner__icon" aria-hidden="true">ℹ</span>
+  <div class="md-banner__body">
+    <div class="md-banner__title">Nothing on this page has been changed on Amazon</div>
+    <p style="margin:6px 0 0">
+      The system only ever writes to a listing it has confirmed exists. A product that
+      cannot be matched is held here instead, which is the difference between this
+      system and a spreadsheet upload &mdash; Amazon reports success for a SKU that does
+      not exist, and then does nothing.
+    </p>
+    <p style="margin:6px 0 0">
+      A large number here is normal and healthy. The vendor carries about 1.15 million
+      products and has roughly 116,000 in stock; the client lists about 45,500 of them
+      on purpose. These are listing opportunities, not faults.
+    </p>
+  </div>
+</div>
+
+{% if by_reason %}
+  <div class="md-grid md-grid--4 mb-3">
+    {% for reason, count in by_reason %}
+      <div class="tile">
+        <span class="tile__label">{{ reason|label }}</span>
+        <span class="tile__value">{{ count|n }}</span>
+        <span class="tile__note">
+          {% if reason == 'no_listing' %}
+            not on the account under any SKU we recognise
+          {% elif reason == 'out_of_scope_prefix' %}
+            listed, but under another supplier's prefix
+          {% elif reason == 'bad_barcode' %}
+            the vendor's barcode is unusable
+          {% elif reason == 'inactive_listing' %}
+            the listing exists but is not active
+          {% endif %}
+        </span>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<div class="md-row md-row--wrap mb-2">
+  <a class="md-chip {{ 'md-chip--selected' if not show_resolved }}" href="/unmatched">
+    Still outstanding
+  </a>
+  <a class="md-chip {{ 'md-chip--selected' if show_resolved }}" href="/unmatched?show_resolved=true">
+    Including dealt with
+  </a>
+  <div class="md-spacer"></div>
+  <a class="md-btn md-btn--outlined md-btn--small" href="/reports?kind=new_products">
+    Download the New Products report
+  </a>
+</div>
+
+{% if rows %}
+  <div class="md-table-wrap">
+    <table class="md-table">
+      <thead>
+        <tr>
+          <th>Barcode</th>
+          <th>Product</th>
+          <th>Type</th>
+          <th class="num">Vendor has</th>
+          <th class="num">Cost</th>
+          <th>Why not matched</th>
+          <th class="num">Seen</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr {% if row.resolved %}style="opacity:.6"{% endif %}>
+            <td class="mono">
+              {{ row.barcode }}
+              {% if row.raw_barcode and row.raw_barcode != row.barcode %}
+                <div class="md-body-small md-muted">vendor sent {{ row.raw_barcode }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <div class="md-truncate" style="max-width:300px" title="{{ row.title }}">
+                {{ row.title or '(no title)' }}
+              </div>
+              <div class="md-body-small md-muted md-truncate" style="max-width:300px">{{ row.artist }}</div>
+            </td>
+            <td><span class="pill pill--neutral">{{ row.product_format or '?' }}</span></td>
+            <td class="num"><strong>{{ row.vendor_stock|n }}</strong></td>
+            <td class="num md-muted">{{ row.vendor_price|money }}</td>
+            <td>
+              <span class="pill pill--{{ 'warn' if row.reason == 'no_listing' else 'neutral' }}">
+                {{ row.reason|label }}
+              </span>
+              {% if row.attempted_sku %}
+                <div class="md-body-small md-muted mono" title="Search Seller Central for this SKU to confirm it does not exist">
+                  tried {{ row.attempted_sku }}
+                </div>
+              {% endif %}
+            </td>
+            <td class="num md-body-small md-muted">
+              {{ row.times_seen|n }}&times;
+              <div>{{ row.last_seen_at|ago }}</div>
+            </td>
+            <td class="md-right md-nowrap">
+              {% if row.resolved %}
+                <span class="pill pill--good">Dealt with</span>
+              {% else %}
+                <form method="post" action="/unmatched/{{ row.barcode }}/resolve">
+                  <button class="md-btn md-btn--text md-btn--small" type="submit"
+                          title="Hide this from the queue. It stays in the history.">
+                    Mark done
+                  </button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pages > 1 %}
+    <div class="pager">
+      {% if page > 1 %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/unmatched?page={{ page - 1 }}{% if show_resolved %}&show_resolved=true{% endif %}">Previous</a>
+      {% endif %}
+      <span class="pager__info">Page {{ page }} of {{ pages|n }}</span>
+      {% if page < pages %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/unmatched?page={{ page + 1 }}{% if show_resolved %}&show_resolved=true{% endif %}">Next</a>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <div class="md-card md-card--outlined mt-3">
+    <div class="md-card__body">
+      <h3 class="mb-1">If a product should be matched but is not</h3>
+      <p class="md-body-medium md-muted">
+        Add a manual mapping in <a href="/settings#mappings">Settings</a>: enter the
+        barcode and the exact SKU it belongs to. The system checks the SKU really exists
+        before using it, so a typo is caught rather than acted on.
+      </p>
+      <p class="md-body-medium md-muted" style="margin-bottom:0">
+        If a whole group is unmatched because it belongs to a different supplier prefix,
+        that is the scope setting working correctly &mdash; the system is leaving another
+        supplier's inventory alone.
+      </p>
+    </div>
+  </div>
+
+{% else %}
+  <div class="empty">
+    <div class="empty__icon" aria-hidden="true">✓</div>
+    <div class="empty__title">Everything in stock is matched</div>
+    <p class="empty__body">
+      Every product the vendor currently has in stock is tied to a confirmed Amazon
+      listing. That is the ideal state.
+    </p>
+  </div>
+{% endif %}
+
+{% endblock %}

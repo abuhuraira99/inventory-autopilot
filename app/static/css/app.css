@@ -1,0 +1,397 @@
+/* ==========================================================================
+   Application layout, on top of the MD3 tokens in md3.css
+   ==========================================================================
+
+   Shell: a persistent navigation rail on the left (MD3's pattern for a
+   dashboard with a handful of destinations), a top app bar carrying the
+   critical state, and a scrolling content region.
+
+   The pause state and the sync mode live in the app bar rather than on a
+   settings page, because "is this thing running, and is it allowed to send?"
+   is the question an operator has every single time they open the dashboard.
+   ========================================================================== */
+
+/* ==========================================================================
+   Shell
+   ========================================================================== */
+
+.shell {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  min-height: 100vh;
+}
+
+/* --- navigation rail --------------------------------------------------- */
+.rail {
+  position: sticky; top: 0;
+  height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px;
+  padding: 12px 0 20px;
+  background: var(--md-surface-container);
+  border-right: 1px solid var(--md-outline-variant);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.rail__brand {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 0 16px;
+  color: var(--md-primary);
+  text-decoration: none;
+}
+.rail__brand:hover { text-decoration: none; }
+.rail__logo {
+  width: 40px; height: 40px;
+  border-radius: var(--md-shape-md);
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+  display: grid; place-items: center;
+  font: 600 17px/1 var(--md-font);
+  letter-spacing: -.5px;
+}
+.rail__item {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px;
+  width: 68px; padding: 8px 0 6px;
+  border-radius: var(--md-shape-md);
+  color: var(--md-on-surface-variant);
+  text-decoration: none;
+  font: 500 11px/14px var(--md-font); letter-spacing: .3px;
+  text-align: center;
+  position: relative; overflow: hidden; isolation: isolate;
+  transition: color var(--md-dur-short) var(--md-ease-standard);
+}
+.rail__item:hover { text-decoration: none; color: var(--md-on-surface); }
+.rail__item::after {
+  content: ""; position: absolute; inset: 0;
+  background: currentColor; opacity: 0;
+  transition: opacity var(--md-dur-short) var(--md-ease-standard);
+}
+.rail__item:hover::after         { opacity: var(--md-state-hover); }
+.rail__item:focus-visible::after { opacity: var(--md-state-focus); }
+.rail__item > *                  { position: relative; z-index: 1; }
+
+.rail__icon {
+  width: 52px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: var(--md-shape-full);
+  font-size: 20px; line-height: 1;
+  transition: background-color var(--md-dur-short) var(--md-ease-standard);
+}
+.rail__item--active { color: var(--md-on-secondary-container); }
+.rail__item--active .rail__icon { background: var(--md-secondary-container); }
+
+/* A count badge on a rail item: unmatched products, waiting approvals. */
+.rail__badge {
+  position: absolute;
+  top: 4px; right: 10px;
+  min-width: 18px; height: 18px;
+  padding: 0 5px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-error);
+  color: var(--md-on-error);
+  font: 600 10px/18px var(--md-font);
+  text-align: center;
+  z-index: 2;
+}
+
+/* --- main region -------------------------------------------------------- */
+.main { display: flex; flex-direction: column; min-width: 0; }
+
+.appbar {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; gap: 16px;
+  min-height: 64px;
+  padding: 10px 24px;
+  background: var(--md-surface-container-low);
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+.appbar__title { font: 400 22px/28px var(--md-font); margin: 0; }
+.appbar__sub {
+  font: 400 12px/16px var(--md-font); letter-spacing: .4px;
+  color: var(--md-on-surface-variant);
+  margin: 2px 0 0;
+}
+.appbar__state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.content { padding: 24px; max-width: 1500px; width: 100%; }
+
+/* ==========================================================================
+   The state strip
+   ==========================================================================
+   Mode and pause, always visible. A paused system gets a full-width error
+   band, because a paused sync that nobody noticed is one of the few ways this
+   software can quietly cost the client money. */
+
+.statestrip {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 10px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-surface-container-high);
+  font: 500 12px/16px var(--md-font); letter-spacing: .3px;
+}
+.statestrip--dry_run        { background: var(--md-primary-container);  color: var(--md-on-primary-container); }
+.statestrip--needs_approval { background: var(--md-warning-container);  color: var(--md-on-warning-container); }
+.statestrip--automatic      { background: var(--md-success-container);  color: var(--md-on-success-container); }
+
+.pausebar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 24px;
+  background: var(--md-error);
+  color: var(--md-on-error);
+  font: 500 14px/20px var(--md-font);
+}
+.pausebar__dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.8s var(--md-ease-standard) infinite;
+  flex: none;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ==========================================================================
+   Statistic tiles
+   ==========================================================================
+   MD3 filled cards. The value is the largest thing in the tile because these
+   are scanned, not read. */
+
+.tile {
+  padding: 18px 20px;
+  border-radius: var(--md-shape-md);
+  background: var(--md-surface-container-low);
+  border: 1px solid var(--md-outline-variant);
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 0;
+}
+.tile__label {
+  font: 500 11px/16px var(--md-font);
+  letter-spacing: .6px; text-transform: uppercase;
+  color: var(--md-on-surface-variant);
+}
+.tile__value {
+  font: 400 32px/40px var(--md-font);
+  font-variant-numeric: tabular-nums;
+  color: var(--md-on-surface);
+}
+.tile__value--sm { font-size: 24px; line-height: 32px; }
+.tile__note {
+  font: 400 12px/16px var(--md-font); letter-spacing: .3px;
+  color: var(--md-on-surface-variant);
+}
+.tile--accent { background: var(--md-primary-container); border-color: transparent; }
+.tile--accent .tile__label, .tile--accent .tile__note { color: var(--md-on-primary-container); opacity: .85; }
+.tile--accent .tile__value { color: var(--md-on-primary-container); }
+.tile--good { background: var(--md-success-container); border-color: transparent; }
+.tile--good .tile__label, .tile--good .tile__note { color: var(--md-on-success-container); opacity: .85; }
+.tile--good .tile__value { color: var(--md-on-success-container); }
+.tile--warn { background: var(--md-warning-container); border-color: transparent; }
+.tile--warn .tile__label, .tile--warn .tile__note { color: var(--md-on-warning-container); opacity: .85; }
+.tile--warn .tile__value { color: var(--md-on-warning-container); }
+.tile--bad  { background: var(--md-error-container); border-color: transparent; }
+.tile--bad .tile__label, .tile--bad .tile__note { color: var(--md-on-error-container); opacity: .85; }
+.tile--bad .tile__value { color: var(--md-on-error-container); }
+
+/* ==========================================================================
+   Quantity change
+   ==========================================================================
+   "5 -> 0" is the single most repeated piece of information in this
+   application, so it gets its own treatment: monospaced so the columns line
+   up, and the arrow coloured by direction so a page of them can be scanned. */
+
+.qty {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--md-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.qty__from { color: var(--md-on-surface-variant); }
+.qty__arrow { color: var(--md-outline); }
+.qty__to { font-weight: 600; }
+.qty--zero .qty__to   { color: var(--md-error); }
+.qty--zero .qty__arrow { color: var(--md-error); }
+.qty--down .qty__to   { color: var(--md-warning); }
+.qty--up   .qty__to   { color: var(--md-success); }
+
+/* ==========================================================================
+   Settings page
+   ========================================================================== */
+
+.settings-nav {
+  position: sticky; top: 84px;
+  display: flex; flex-direction: column; gap: 2px;
+  align-self: start;
+}
+.settings-nav a {
+  padding: 9px 14px;
+  border-radius: var(--md-shape-full);
+  color: var(--md-on-surface-variant);
+  font: 500 14px/20px var(--md-font);
+  text-decoration: none;
+}
+.settings-nav a:hover {
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface);
+  text-decoration: none;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  gap: 28px;
+  align-items: start;
+}
+
+.setting {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+.setting:last-child { border-bottom: none; }
+.setting__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.setting__control { max-width: 420px; margin-top: 10px; }
+.setting__control--wide { max-width: 100%; }
+
+/* A setting whose value directly changes what is written to a live account. */
+.setting--impact { border-left: 3px solid var(--md-warning); padding-left: 16px; }
+.setting--locked { opacity: .72; }
+
+.badge-impact {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: var(--md-shape-full);
+  background: var(--md-warning-container); color: var(--md-on-warning-container);
+  font: 600 10px/14px var(--md-font); letter-spacing: .5px; text-transform: uppercase;
+}
+.badge-locked {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: var(--md-shape-full);
+  background: var(--md-surface-container-highest); color: var(--md-on-surface-variant);
+  font: 600 10px/14px var(--md-font); letter-spacing: .5px; text-transform: uppercase;
+}
+
+/* ==========================================================================
+   Login
+   ========================================================================== */
+
+.login-page {
+  min-height: 100vh;
+  display: grid; place-items: center;
+  padding: 24px;
+  background: var(--md-surface-container-low);
+}
+.login-card {
+  width: min(420px, 100%);
+  padding: 36px 32px;
+  border-radius: var(--md-shape-xl);
+  background: var(--md-surface-container-lowest);
+  box-shadow: var(--md-elev-2);
+}
+.login-brand {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  margin-bottom: 28px;
+}
+.login-brand__logo {
+  width: 56px; height: 56px;
+  border-radius: var(--md-shape-lg);
+  background: var(--md-primary); color: var(--md-on-primary);
+  display: grid; place-items: center;
+  font: 600 22px/1 var(--md-font); letter-spacing: -.5px;
+}
+.login-note {
+  margin-top: 22px; padding-top: 18px;
+  border-top: 1px solid var(--md-outline-variant);
+  font: 400 12px/17px var(--md-font);
+  color: var(--md-on-surface-variant);
+  text-align: center;
+}
+
+/* ==========================================================================
+   Empty state
+   ========================================================================== */
+
+.empty {
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--md-on-surface-variant);
+}
+.empty__icon { font-size: 40px; opacity: .5; margin-bottom: 12px; }
+.empty__title { font: 400 22px/28px var(--md-font); color: var(--md-on-surface); margin-bottom: 6px; }
+.empty__body { max-width: 52ch; margin: 0 auto; }
+
+/* ==========================================================================
+   Pagination
+   ========================================================================== */
+
+.pager {
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; margin-top: 20px; flex-wrap: wrap;
+}
+.pager__info { color: var(--md-on-surface-variant); font-size: 13px; }
+
+/* ==========================================================================
+   Definition list, for run detail
+   ========================================================================== */
+
+.kv { display: grid; grid-template-columns: minmax(150px, auto) 1fr; gap: 8px 20px; }
+.kv dt {
+  font: 500 12px/18px var(--md-font);
+  letter-spacing: .4px; text-transform: uppercase;
+  color: var(--md-on-surface-variant);
+}
+.kv dd { margin: 0; font: 400 14px/18px var(--md-font); }
+
+/* ==========================================================================
+   Preformatted explanation, for a guardrail message
+   ========================================================================== */
+
+.explain {
+  white-space: pre-wrap;
+  font: 400 13px/19px var(--md-font);
+  background: var(--md-surface-container);
+  border-radius: var(--md-shape-sm);
+  padding: 14px 16px;
+  margin: 0;
+  overflow-x: auto;
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+
+@media (max-width: 900px) {
+  .settings-layout { grid-template-columns: 1fr; }
+  .settings-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+}
+
+@media (max-width: 720px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail {
+    position: fixed; bottom: 0; top: auto; left: 0; right: 0;
+    height: auto; width: 100%;
+    flex-direction: row; justify-content: space-around;
+    padding: 6px 4px;
+    border-right: none;
+    border-top: 1px solid var(--md-outline-variant);
+    z-index: 50;
+    overflow-x: auto; overflow-y: hidden;
+  }
+  .rail__brand { display: none; }
+  .rail__item { width: auto; min-width: 60px; padding: 4px 6px; }
+  .content { padding: 16px; padding-bottom: 92px; }
+  .appbar { padding: 10px 16px; }
+  .appbar__title { font-size: 19px; line-height: 24px; }
+  .md-fab { bottom: 88px; }
+}
+
+/* ==========================================================================
+   Print
+   ==========================================================================
+   Worth having: a run detail page is the natural thing to print or export as
+   PDF when explaining to the client what the system did. */
+
+@media print {
+  .rail, .appbar, .md-fab, .md-snackbar, .md-card__actions { display: none !important; }
+  .shell { grid-template-columns: 1fr; }
+  .content { padding: 0; max-width: none; }
+  .md-card, .md-table-wrap { break-inside: avoid; box-shadow: none; }
+  body { background: #fff; color: #000; }
+}

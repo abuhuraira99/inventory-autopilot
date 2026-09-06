@@ -1,0 +1,201 @@
+{#
+  The shell every page sits inside.
+
+  Three things are always on screen, by design:
+
+    1. the pause state - a paused sync that nobody noticed is one of the few
+       ways this software can quietly cost the client money, so it gets a
+       full-width band rather than a subtle indicator
+    2. the sync mode - "is it allowed to send?" is the question an operator has
+       every single time they open the dashboard
+    3. anything that is not configured - as instructions, not as error codes
+
+  The navigation is a Material Design 3 navigation rail: correct for a handful
+  of destinations, and it collapses to a bottom bar on a phone.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+
+  {# Applied before first paint so there is no flash of the wrong theme. #}
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("autopilot-theme");
+        if (t === "light" || t === "dark") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      } catch (e) { /* private browsing: follow the OS */ }
+    })();
+  </script>
+
+  <link rel="stylesheet" href="/static/css/md3.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2300658b'/><text x='16' y='23' font-size='18' font-family='sans-serif' font-weight='600' fill='white' text-anchor='middle'>IA</text></svg>">
+</head>
+<body>
+
+<div class="shell">
+
+  {# ==================================================================
+     Navigation rail
+     ================================================================== #}
+  <nav class="rail" aria-label="Main navigation">
+    <a class="rail__brand" href="/" title="{{ app_name }}">
+      <span class="rail__logo" aria-hidden="true">IA</span>
+    </a>
+
+    {% set nav = [
+      ('/',          'Status',    '◉'),
+      ('/runs',      'Runs',      '↻'),
+      ('/products',  'Products',  '▦'),
+      ('/unmatched', 'Unmatched', '⚑'),
+      ('/reports',   'Reports',   '⤓'),
+      ('/settings',  'Settings',  '⚙'),
+      ('/audit',     'Audit',     '≡'),
+    ] %}
+
+    {% for href, label, icon in nav %}
+      {% set active = (path == href) or (href != '/' and path.startswith(href)) %}
+      <a class="rail__item {% if active %}rail__item--active{% endif %}"
+         href="{{ href }}"
+         {% if active %}aria-current="page"{% endif %}>
+        {% if href == '/unmatched' %}
+          <span class="rail__badge" data-live="needs_attention.unmatched_in_stock" hidden></span>
+        {% elif href == '/runs' %}
+          <span class="rail__badge" data-live="needs_attention.batches_awaiting_approval" hidden></span>
+        {% endif %}
+        <span class="rail__icon" aria-hidden="true">{{ icon }}</span>
+        <span>{{ label }}</span>
+      </a>
+    {% endfor %}
+
+    <div class="md-spacer"></div>
+
+    <button class="md-icon-btn" data-theme-toggle type="button" aria-label="Change appearance">◑</button>
+    <a class="rail__item" href="/logout" title="Sign out">
+      <span class="rail__icon" aria-hidden="true">⏻</span>
+      <span>Sign out</span>
+    </a>
+  </nav>
+
+  {# ==================================================================
+     Main
+     ================================================================== #}
+  <div class="main">
+
+    {# The emergency stop, if it is on. Impossible to miss, deliberately. #}
+    {% if paused %}
+      <div class="pausebar" role="alert">
+        <span class="pausebar__dot" aria-hidden="true"></span>
+        <div class="md-grow">
+          <strong>Everything is paused.</strong>
+          Nothing is being downloaded, decided or sent. No work is lost &mdash; it is
+          picked up when you resume.
+        </div>
+        <form method="post" action="/actions/pause">
+          <button class="md-btn md-btn--small md-btn--filled" type="submit">Resume</button>
+        </form>
+      </div>
+    {% endif %}
+
+    <header class="appbar">
+      <div class="md-grow" style="min-width:0">
+        <h1 class="appbar__title">{% block heading %}{{ self.title() }}{% endblock %}</h1>
+        {% block subheading %}{% endblock %}
+      </div>
+
+      <div class="appbar__state">
+        {% if sync_mode %}
+          <span class="statestrip statestrip--{{ sync_mode }}"
+                title="What the system is allowed to do. Change it in Settings.">
+            {% if sync_mode == 'dry_run' %}◑ Practice mode &mdash; nothing is sent
+            {% elif sync_mode == 'needs_approval' %}✓ Ask first
+            {% else %}▶ Automatic{% endif %}
+          </span>
+        {% endif %}
+
+        <span class="pill pill--warn" data-live-stale hidden
+              title="The live figures could not be refreshed.">
+          Not live
+        </span>
+
+        {% block appbar_actions %}{% endblock %}
+      </div>
+    </header>
+
+    <main class="content">
+
+      {# ---- flash message ------------------------------------------- #}
+      {% if flash %}
+        <div class="md-snackbar md-snackbar--{{ flash_tone|default('good') }}" role="status">
+          <span class="md-grow">{{ flash }}</span>
+          <button class="md-snackbar__close" type="button" aria-label="Dismiss">&times;</button>
+        </div>
+      {% endif %}
+
+      {# ---- things that are not configured -------------------------- #}
+      {% if readiness and readiness.problems %}
+        <div class="md-banner md-banner--bad" role="alert">
+          <span class="md-banner__icon" aria-hidden="true">⚠</span>
+          <div class="md-banner__body">
+            <div class="md-banner__title">
+              {{ readiness.problems|length }} thing{{ 's' if readiness.problems|length != 1 }}
+              still {{ 'need' if readiness.problems|length != 1 else 'needs' }} setting up
+            </div>
+            <ul>
+              {% for problem in readiness.problems %}<li>{{ problem }}</li>{% endfor %}
+            </ul>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if readiness and readiness.warnings and path == '/' %}
+        <div class="md-banner md-banner--warn">
+          <span class="md-banner__icon" aria-hidden="true">!</span>
+          <div class="md-banner__body">
+            <div class="md-banner__title">Worth checking</div>
+            <ul>
+              {% for warning in readiness.warnings %}<li>{{ warning }}</li>{% endfor %}
+            </ul>
+          </div>
+        </div>
+      {% endif %}
+
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer class="content md-body-small md-muted" style="padding-top:0">
+      <hr class="md-divider">
+      <div class="md-row md-row--wrap md-row--between">
+        <span>
+          {{ app_name }} v{{ version }}
+          {% if environment != 'production' %}
+            &mdash; <strong>{{ environment }}</strong>
+          {% endif %}
+        </span>
+        <span>
+          This system only ever changes stock quantities. It never changes prices.
+        </span>
+        {% if jobs %}
+          <span>
+            Next check
+            <strong data-live="next_sync" data-live-raw>
+              {% for job in jobs %}{% if job.id == 'sync' %}{{ job.next_run }}{% endif %}{% endfor %}
+            </strong>
+          </span>
+        {% endif %}
+      </div>
+    </footer>
+
+  </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

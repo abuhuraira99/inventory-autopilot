@@ -1,0 +1,146 @@
+{#
+  The five report files.
+
+  The client's team uses In Stock and New Products daily and wanted the other
+  three produced as well -- separately for each delta run and each full-feed
+  run, which the filename makes unambiguous.
+#}
+{% extends "base.html" %}
+
+{% block title %}Reports &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Reports{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">
+    {{ total|n }} file{{ 's' if total != 1 }} available &middot;
+    kept for {{ cfg.report_retention_days }} days
+  </p>
+{% endblock %}
+
+{% block content %}
+
+<div class="md-banner md-banner--warn">
+  <span class="md-banner__icon" aria-hidden="true">!</span>
+  <div class="md-banner__body">
+    <div class="md-banner__title">Do not convert these files to CSV</div>
+    <p style="margin:6px 0 0">
+      These are real Excel files with the barcode and SKU columns stored as text, so
+      their leading zeros survive. Open a CSV of the same data in Excel and
+      <span class="mono">0008811065126</span> silently becomes
+      <span class="mono">8811065126</span> &mdash; and that SKU does not exist on Amazon.
+      Two thirds of this account's listings depend on those zeros.
+    </p>
+  </div>
+</div>
+
+{# ---- the newest of each kind, prominently ---------------------------- #}
+<h2 class="md-title-medium mb-1">Latest of each</h2>
+<div class="md-grid md-grid--3 mb-3">
+  {% for kind, title in titles.items() %}
+    {% set report = newest.get(kind) %}
+    <div class="md-card {{ 'md-card--elevated' if kind in ['in_stock', 'new_products'] else 'md-card--outlined' }}">
+      <div class="md-card__body">
+        <div class="md-row md-row--between" style="align-items:flex-start">
+          <div class="md-grow">
+            <h3 style="margin:0 0 4px">{{ title }}</h3>
+            {% if kind in ['in_stock', 'new_products'] %}
+              <span class="pill pill--info">Used daily by the team</span>
+            {% endif %}
+          </div>
+        </div>
+        <p class="md-body-small md-muted" style="margin:10px 0">
+          {{ descriptions.get(kind, '') }}
+        </p>
+        {% if report %}
+          <div class="md-row md-row--between">
+            <div>
+              <div class="md-body-small md-muted">
+                {{ report.row_count|n }} rows &middot; {{ report.size_bytes|bytes }}
+              </div>
+              <div class="md-body-small md-muted">
+                {{ report.created_at|ago }} &middot;
+                <span class="pill pill--{{ 'info' if report.feed_kind.value == 'full' else 'neutral' }}">
+                  {{ report.feed_kind|label }}
+                </span>
+              </div>
+            </div>
+            <a class="md-btn md-btn--tonal md-btn--small" href="/reports/{{ report.id }}/download">
+              Download
+            </a>
+          </div>
+        {% else %}
+          <p class="md-body-small md-muted" style="margin:0">
+            Not produced yet. Reports are written after each run that processes a file.
+          </p>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+{# ---- history --------------------------------------------------------- #}
+<div class="md-row md-row--wrap mb-2">
+  <a class="md-chip {{ 'md-chip--selected' if not kind }}" href="/reports">All kinds</a>
+  {% for k, title in titles.items() %}
+    <a class="md-chip {{ 'md-chip--selected' if kind == k }}" href="/reports?kind={{ k }}">{{ title }}</a>
+  {% endfor %}
+</div>
+
+{% if rows %}
+  <div class="md-table-wrap">
+    <table class="md-table md-table--dense">
+      <thead>
+        <tr>
+          <th>Report</th><th>From</th><th>Run</th>
+          <th class="num">Rows</th><th class="num">Size</th><th>Created</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for report in rows %}
+          <tr>
+            <td><strong>{{ titles.get(report.kind, report.kind) }}</strong></td>
+            <td>
+              <span class="pill pill--{{ 'info' if report.feed_kind.value == 'full' else 'neutral' }}">
+                {{ report.feed_kind|label }}
+              </span>
+            </td>
+            <td><a href="/runs/{{ report.run_id }}">{{ report.run_id }}</a></td>
+            <td class="num">{{ report.row_count|n }}</td>
+            <td class="num md-muted">{{ report.size_bytes|bytes }}</td>
+            <td class="md-body-small md-muted md-nowrap">{{ report.created_at|dt(tz) }}</td>
+            <td class="md-right">
+              <a class="md-btn md-btn--text md-btn--small" href="/reports/{{ report.id }}/download">
+                Download
+              </a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pages > 1 %}
+    <div class="pager">
+      {% if page > 1 %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/reports?page={{ page - 1 }}{% if kind %}&kind={{ kind }}{% endif %}">Previous</a>
+      {% endif %}
+      <span class="pager__info">Page {{ page }} of {{ pages|n }}</span>
+      {% if page < pages %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/reports?page={{ page + 1 }}{% if kind %}&kind={{ kind }}{% endif %}">Next</a>
+      {% endif %}
+    </div>
+  {% endif %}
+
+{% else %}
+  <div class="empty">
+    <div class="empty__icon" aria-hidden="true">⤓</div>
+    <div class="empty__title">No reports yet</div>
+    <p class="empty__body">
+      All five files are produced after every run that processes a vendor file. Press
+      <strong>Check now</strong> on the status page to make the first set.
+    </p>
+  </div>
+{% endif %}
+
+{% endblock %}

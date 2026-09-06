@@ -1,0 +1,906 @@
+/* ==========================================================================
+   Material Design 3 - design tokens and components
+   ==========================================================================
+
+   A hand-built MD3 implementation rather than a component library, for three
+   reasons that matter to this project:
+
+     1. NO BUILD STEP. There is no npm, no bundler, no compile stage that can
+        break a deployment at an awkward hour. The stylesheet is served as it
+        is written.
+
+     2. NO EXTERNAL REQUESTS. The Content-Security-Policy in app/main.py is
+        `default-src 'self'`, and the recommended deployment reaches the
+        dashboard through a private tunnel with no assumption of internet
+        egress. A stylesheet that pulled a font from a CDN would silently fail.
+
+     3. WEIGHT. The whole interface is about 30 KB of CSS and 4 KB of
+        JavaScript. A component library would be an order of magnitude larger
+        for a dashboard with eleven pages.
+
+   TYPOGRAPHY
+   ----------
+   MD3 specifies Roboto. Rather than self-hosting ~200 KB of web font, this
+   uses the platform UI font, which is what Material's own web guidance permits
+   and what every native MD3 surface actually renders on a given OS. The type
+   SCALE is followed exactly - that is what carries the Material feel, far more
+   than the specific letterforms.
+
+   COLOUR
+   ------
+   A full MD3 tonal palette derived from a petrol-blue source hue. Deliberately
+   not Amazon orange: this is the agency's control room, not an Amazon
+   property, and a saturated orange at dashboard scale is fatiguing.
+
+   Semantic colour (success / warning / danger) is a SEPARATE set of tokens
+   from the primary accent. A green pill always means "fine" and never "this is
+   the brand colour", which is the rule that keeps a status page readable.
+
+   Both light and dark are first-class. The theme follows the operating system
+   and can be overridden with a toggle that persists.
+   ========================================================================== */
+
+/* ==========================================================================
+   1. TOKENS
+   ========================================================================== */
+
+:root {
+  /* --- primary: petrol blue --------------------------------------------- */
+  --md-primary:                 #00658b;
+  --md-on-primary:              #ffffff;
+  --md-primary-container:       #c4e7ff;
+  --md-on-primary-container:    #001e2c;
+
+  /* --- secondary: desaturated, for supporting surfaces ------------------ */
+  --md-secondary:               #4d616c;
+  --md-on-secondary:            #ffffff;
+  --md-secondary-container:     #d0e6f2;
+  --md-on-secondary-container:  #081e27;
+
+  /* --- tertiary: hue-shifted, for accents that must not read as primary - */
+  --md-tertiary:                #5f5b7d;
+  --md-on-tertiary:             #ffffff;
+  --md-tertiary-container:      #e5dfff;
+  --md-on-tertiary-container:   #1b1836;
+
+  /* --- error ------------------------------------------------------------ */
+  --md-error:                   #ba1a1a;
+  --md-on-error:                #ffffff;
+  --md-error-container:         #ffdad6;
+  --md-on-error-container:      #410002;
+
+  /* --- semantic status: SEPARATE from the accent above ------------------ */
+  --md-success:                 #1f6c4a;
+  --md-on-success:              #ffffff;
+  --md-success-container:       #a8f2c8;
+  --md-on-success-container:    #002110;
+
+  --md-warning:                 #7d5700;
+  --md-on-warning:              #ffffff;
+  --md-warning-container:       #ffdea6;
+  --md-on-warning-container:    #271900;
+
+  /* --- surfaces: MD3's five container levels ---------------------------- */
+  --md-surface:                        #f6fafe;
+  --md-surface-dim:                    #d6dae0;
+  --md-surface-bright:                 #f6fafe;
+  --md-surface-container-lowest:       #ffffff;
+  --md-surface-container-low:          #f0f4fa;
+  --md-surface-container:              #eaeef4;
+  --md-surface-container-high:         #e4e9ef;
+  --md-surface-container-highest:      #dee3e9;
+  --md-on-surface:                     #171c1f;
+  --md-on-surface-variant:             #41484d;
+  --md-inverse-surface:                #2c3134;
+  --md-inverse-on-surface:             #edf1f5;
+
+  --md-outline:                 #71787d;
+  --md-outline-variant:         #c1c7cd;
+  --md-scrim:                   rgba(0, 0, 0, 0.5);
+
+  /* --- shape: MD3's corner scale ---------------------------------------- */
+  --md-shape-xs:   4px;
+  --md-shape-sm:   8px;
+  --md-shape-md:  12px;
+  --md-shape-lg:  16px;
+  --md-shape-xl:  28px;
+  --md-shape-full: 999px;
+
+  /* --- elevation: MD3's five levels ------------------------------------- */
+  --md-elev-0: none;
+  --md-elev-1: 0 1px 2px rgba(0,0,0,.30), 0 1px 3px 1px rgba(0,0,0,.15);
+  --md-elev-2: 0 1px 2px rgba(0,0,0,.30), 0 2px 6px 2px rgba(0,0,0,.15);
+  --md-elev-3: 0 1px 3px rgba(0,0,0,.30), 0 4px 8px 3px rgba(0,0,0,.15);
+  --md-elev-4: 0 2px 3px rgba(0,0,0,.30), 0 6px 10px 4px rgba(0,0,0,.15);
+  --md-elev-5: 0 4px 4px rgba(0,0,0,.30), 0 8px 12px 6px rgba(0,0,0,.15);
+
+  /* --- state layer opacities, straight from the MD3 spec ---------------- */
+  --md-state-hover:   0.08;
+  --md-state-focus:   0.10;
+  --md-state-press:   0.10;
+  --md-state-drag:    0.16;
+
+  /* --- motion: MD3 easing curves --------------------------------------- */
+  --md-ease-standard:      cubic-bezier(0.2, 0, 0, 1);
+  --md-ease-emphasized:    cubic-bezier(0.2, 0, 0, 1);
+  --md-ease-decelerate:    cubic-bezier(0, 0, 0, 1);
+  --md-ease-accelerate:    cubic-bezier(0.3, 0, 1, 1);
+  --md-dur-short:  150ms;
+  --md-dur-medium: 250ms;
+  --md-dur-long:   400ms;
+
+  /* --- type: the platform UI stack, MD3's scale ------------------------- */
+  --md-font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text",
+             "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --md-font-mono: "Cascadia Mono", "SF Mono", "JetBrains Mono", ui-monospace,
+                  Menlo, Consolas, monospace;
+}
+
+/* --- dark theme: follows the OS unless overridden --------------------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --md-primary:                 #7fd0f5;
+    --md-on-primary:              #003549;
+    --md-primary-container:       #004c69;
+    --md-on-primary-container:    #c4e7ff;
+
+    --md-secondary:               #b4cad6;
+    --md-on-secondary:            #1f333c;
+    --md-secondary-container:     #354a53;
+    --md-on-secondary-container:  #d0e6f2;
+
+    --md-tertiary:                #c8c2ea;
+    --md-on-tertiary:             #302d4c;
+    --md-tertiary-container:      #474364;
+    --md-on-tertiary-container:   #e5dfff;
+
+    --md-error:                   #ffb4ab;
+    --md-on-error:                #690005;
+    --md-error-container:         #93000a;
+    --md-on-error-container:      #ffdad6;
+
+    --md-success:                 #8cd5ac;
+    --md-on-success:              #00391f;
+    --md-success-container:       #005232;
+    --md-on-success-container:    #a8f2c8;
+
+    --md-warning:                 #ffba3b;
+    --md-on-warning:              #422c00;
+    --md-warning-container:       #5d4200;
+    --md-on-warning-container:    #ffdea6;
+
+    --md-surface:                        #0f1417;
+    --md-surface-dim:                    #0f1417;
+    --md-surface-bright:                 #353a3d;
+    --md-surface-container-lowest:       #0a0f12;
+    --md-surface-container-low:          #171c1f;
+    --md-surface-container:              #1b2023;
+    --md-surface-container-high:         #262b2e;
+    --md-surface-container-highest:      #313539;
+    --md-on-surface:                     #dfe3e7;
+    --md-on-surface-variant:             #c1c7cd;
+    --md-inverse-surface:                #dfe3e7;
+    --md-inverse-on-surface:             #2c3134;
+
+    --md-outline:                 #8b9297;
+    --md-outline-variant:         #41484d;
+    --md-scrim:                   rgba(0, 0, 0, 0.7);
+
+    /* Shadows read as noise on a dark ground; MD3 leans on surface
+       elevation there instead, so these are softened rather than removed. */
+    --md-elev-1: 0 1px 2px rgba(0,0,0,.50);
+    --md-elev-2: 0 1px 3px rgba(0,0,0,.55);
+    --md-elev-3: 0 2px 6px rgba(0,0,0,.60);
+    --md-elev-4: 0 4px 10px rgba(0,0,0,.60);
+    --md-elev-5: 0 6px 14px rgba(0,0,0,.65);
+  }
+}
+
+/* Explicit dark, from the toggle. Duplicated rather than shared so an
+   explicit choice beats the OS in both directions. */
+:root[data-theme="dark"] {
+  --md-primary:                 #7fd0f5;
+  --md-on-primary:              #003549;
+  --md-primary-container:       #004c69;
+  --md-on-primary-container:    #c4e7ff;
+  --md-secondary:               #b4cad6;
+  --md-on-secondary:            #1f333c;
+  --md-secondary-container:     #354a53;
+  --md-on-secondary-container:  #d0e6f2;
+  --md-tertiary:                #c8c2ea;
+  --md-on-tertiary:             #302d4c;
+  --md-tertiary-container:      #474364;
+  --md-on-tertiary-container:   #e5dfff;
+  --md-error:                   #ffb4ab;
+  --md-on-error:                #690005;
+  --md-error-container:         #93000a;
+  --md-on-error-container:      #ffdad6;
+  --md-success:                 #8cd5ac;
+  --md-on-success:              #00391f;
+  --md-success-container:       #005232;
+  --md-on-success-container:    #a8f2c8;
+  --md-warning:                 #ffba3b;
+  --md-on-warning:              #422c00;
+  --md-warning-container:       #5d4200;
+  --md-on-warning-container:    #ffdea6;
+  --md-surface:                        #0f1417;
+  --md-surface-dim:                    #0f1417;
+  --md-surface-bright:                 #353a3d;
+  --md-surface-container-lowest:       #0a0f12;
+  --md-surface-container-low:          #171c1f;
+  --md-surface-container:              #1b2023;
+  --md-surface-container-high:         #262b2e;
+  --md-surface-container-highest:      #313539;
+  --md-on-surface:                     #dfe3e7;
+  --md-on-surface-variant:             #c1c7cd;
+  --md-inverse-surface:                #dfe3e7;
+  --md-inverse-on-surface:             #2c3134;
+  --md-outline:                 #8b9297;
+  --md-outline-variant:         #41484d;
+  --md-scrim:                   rgba(0, 0, 0, 0.7);
+  --md-elev-1: 0 1px 2px rgba(0,0,0,.50);
+  --md-elev-2: 0 1px 3px rgba(0,0,0,.55);
+  --md-elev-3: 0 2px 6px rgba(0,0,0,.60);
+  --md-elev-4: 0 4px 10px rgba(0,0,0,.60);
+  --md-elev-5: 0 6px 14px rgba(0,0,0,.65);
+}
+
+/* ==========================================================================
+   2. RESET
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  font-family: var(--md-font);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Focus is never removed, only made intentional. This dashboard can send
+   5,000 changes to a live account; keyboard operation must be reliable. */
+:focus-visible {
+  outline: 3px solid var(--md-primary);
+  outline-offset: 2px;
+  border-radius: var(--md-shape-xs);
+}
+:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   3. TYPE SCALE  (MD3, exact)
+   ========================================================================== */
+
+.md-display-large  { font: 400 57px/64px var(--md-font); letter-spacing: -.25px; }
+.md-display-medium { font: 400 45px/52px var(--md-font); }
+.md-display-small  { font: 400 36px/44px var(--md-font); }
+
+.md-headline-large  { font: 400 32px/40px var(--md-font); }
+.md-headline-medium { font: 400 28px/36px var(--md-font); }
+.md-headline-small  { font: 400 24px/32px var(--md-font); }
+
+.md-title-large  { font: 400 22px/28px var(--md-font); }
+.md-title-medium { font: 500 16px/24px var(--md-font); letter-spacing: .15px; }
+.md-title-small  { font: 500 14px/20px var(--md-font); letter-spacing: .1px; }
+
+.md-body-large  { font: 400 16px/24px var(--md-font); letter-spacing: .5px; }
+.md-body-medium { font: 400 14px/20px var(--md-font); letter-spacing: .25px; }
+.md-body-small  { font: 400 12px/16px var(--md-font); letter-spacing: .4px; }
+
+.md-label-large  { font: 500 14px/20px var(--md-font); letter-spacing: .1px; }
+.md-label-medium { font: 500 12px/16px var(--md-font); letter-spacing: .5px; }
+.md-label-small  { font: 500 11px/16px var(--md-font); letter-spacing: .5px; }
+
+h1, h2, h3, h4 { margin: 0; font-weight: 400; }
+h1 { font: 400 28px/36px var(--md-font); }
+h2 { font: 400 22px/28px var(--md-font); }
+h3 { font: 500 16px/24px var(--md-font); letter-spacing: .15px; }
+h4 { font: 500 14px/20px var(--md-font); letter-spacing: .1px; }
+p  { margin: 0 0 12px; }
+
+/* Wherever digits line up in a column, they must actually line up. */
+.tabular { font-variant-numeric: tabular-nums; }
+code, .mono, .md-mono {
+  font-family: var(--md-font-mono);
+  font-size: .92em;
+  font-variant-numeric: tabular-nums;
+}
+
+a { color: var(--md-primary); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* ==========================================================================
+   4. STATE LAYERS
+   ========================================================================== */
+/* MD3 renders interaction as a translucent layer of the FOREGROUND colour over
+   the component, rather than as a different background colour. That is what
+   makes hover and press feel consistent across button variants. */
+
+.md-state {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.md-state::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity var(--md-dur-short) var(--md-ease-standard);
+  pointer-events: none;
+  z-index: 0;
+}
+.md-state:hover::after   { opacity: var(--md-state-hover); }
+.md-state:focus-visible::after { opacity: var(--md-state-focus); }
+.md-state:active::after  { opacity: var(--md-state-press); }
+.md-state > * { position: relative; z-index: 1; }
+
+/* ==========================================================================
+   5. BUTTONS
+   ========================================================================== */
+
+.md-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 24px;
+  border: none;
+  border-radius: var(--md-shape-full);
+  font: 500 14px/20px var(--md-font);
+  letter-spacing: .1px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: box-shadow var(--md-dur-short) var(--md-ease-standard),
+              background-color var(--md-dur-short) var(--md-ease-standard);
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.md-btn:hover { text-decoration: none; }
+.md-btn::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: currentColor; opacity: 0;
+  transition: opacity var(--md-dur-short) var(--md-ease-standard);
+  pointer-events: none; z-index: 0;
+}
+.md-btn:hover::after         { opacity: var(--md-state-hover); }
+.md-btn:focus-visible::after { opacity: var(--md-state-focus); }
+.md-btn:active::after        { opacity: var(--md-state-press); }
+.md-btn > *                  { position: relative; z-index: 1; }
+
+.md-btn:disabled,
+.md-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--md-on-surface) 12%, transparent);
+  color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+  box-shadow: none;
+}
+.md-btn:disabled::after { opacity: 0; }
+
+/* filled - the one primary action per view */
+.md-btn--filled {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+.md-btn--filled:hover { box-shadow: var(--md-elev-1); }
+
+/* tonal - a secondary action that still deserves weight */
+.md-btn--tonal {
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+}
+.md-btn--tonal:hover { box-shadow: var(--md-elev-1); }
+
+/* outlined - lower emphasis, still clearly a control */
+.md-btn--outlined {
+  background: transparent;
+  color: var(--md-primary);
+  border: 1px solid var(--md-outline);
+}
+
+/* text - lowest emphasis, for cancel and inline links */
+.md-btn--text {
+  background: transparent;
+  color: var(--md-primary);
+  padding: 0 12px;
+}
+
+/* danger - undo, pause, anything that changes a live account */
+.md-btn--danger {
+  background: var(--md-error);
+  color: var(--md-on-error);
+}
+.md-btn--danger-outlined {
+  background: transparent;
+  color: var(--md-error);
+  border: 1px solid var(--md-error);
+}
+
+/* success - approve */
+.md-btn--success {
+  background: var(--md-success);
+  color: var(--md-on-success);
+}
+
+.md-btn--small { min-height: 32px; padding: 0 16px; font-size: 13px; }
+.md-btn--block { width: 100%; }
+
+/* icon-only */
+.md-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px; height: 40px;
+  border: none; border-radius: var(--md-shape-full);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  cursor: pointer;
+  position: relative; overflow: hidden; isolation: isolate;
+}
+.md-icon-btn::after {
+  content: ""; position: absolute; inset: 0;
+  background: currentColor; opacity: 0;
+  transition: opacity var(--md-dur-short) var(--md-ease-standard);
+}
+.md-icon-btn:hover::after         { opacity: var(--md-state-hover); }
+.md-icon-btn:focus-visible::after { opacity: var(--md-state-focus); }
+.md-icon-btn > *                  { position: relative; z-index: 1; }
+
+/* FAB */
+.md-fab {
+  position: fixed;
+  right: 24px; bottom: 24px;
+  display: inline-flex; align-items: center; gap: 12px;
+  min-height: 56px; padding: 0 20px;
+  border: none; border-radius: var(--md-shape-lg);
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  font: 500 14px/20px var(--md-font);
+  box-shadow: var(--md-elev-3);
+  cursor: pointer;
+  z-index: 40;
+}
+.md-fab:hover { box-shadow: var(--md-elev-4); }
+
+/* ==========================================================================
+   6. CARDS
+   ========================================================================== */
+
+.md-card {
+  border-radius: var(--md-shape-md);
+  background: var(--md-surface-container-low);
+  color: var(--md-on-surface);
+  overflow: hidden;
+}
+.md-card--elevated {
+  background: var(--md-surface-container-low);
+  box-shadow: var(--md-elev-1);
+}
+.md-card--filled  { background: var(--md-surface-container-highest); }
+.md-card--outlined {
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+}
+.md-card__header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+.md-card__title {
+  font: 500 16px/24px var(--md-font); letter-spacing: .15px;
+  margin: 0;
+}
+.md-card__subtitle {
+  font: 400 12px/16px var(--md-font); letter-spacing: .4px;
+  color: var(--md-on-surface-variant);
+  margin: 2px 0 0;
+}
+.md-card__body    { padding: 16px 20px; }
+.md-card__body--flush { padding: 0; }
+.md-card__actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 12px 20px 16px;
+}
+
+/* ==========================================================================
+   7. CHIPS AND STATUS PILLS
+   ========================================================================== */
+
+.md-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  border-radius: var(--md-shape-sm);
+  border: 1px solid var(--md-outline-variant);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  font: 500 13px/18px var(--md-font); letter-spacing: .1px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.md-chip:hover { background: var(--md-surface-container-high); text-decoration: none; }
+.md-chip--selected {
+  background: var(--md-secondary-container);
+  color: var(--md-on-secondary-container);
+  border-color: transparent;
+}
+
+/* Status pills. Semantic colour only - never the accent. */
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px;
+  border-radius: var(--md-shape-full);
+  font: 500 11px/16px var(--md-font);
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pill::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+.pill--good    { background: var(--md-success-container); color: var(--md-on-success-container); }
+.pill--warn    { background: var(--md-warning-container); color: var(--md-on-warning-container); }
+.pill--bad     { background: var(--md-error-container);   color: var(--md-on-error-container); }
+.pill--info    { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.pill--neutral { background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); }
+
+/* ==========================================================================
+   8. TEXT FIELDS  (MD3 outlined)
+   ========================================================================== */
+
+.md-field { position: relative; margin-bottom: 20px; }
+.md-field__label {
+  display: block;
+  font: 500 14px/20px var(--md-font); letter-spacing: .1px;
+  color: var(--md-on-surface);
+  margin-bottom: 6px;
+}
+.md-field__help {
+  font: 400 12px/16px var(--md-font); letter-spacing: .4px;
+  color: var(--md-on-surface-variant);
+  margin: 6px 0 0;
+  max-width: 68ch;
+}
+.md-field__error {
+  font: 400 12px/16px var(--md-font);
+  color: var(--md-error);
+  margin: 6px 0 0;
+}
+
+.md-input, .md-select, .md-textarea {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  border: 1px solid var(--md-outline);
+  border-radius: var(--md-shape-xs);
+  background: var(--md-surface-container-lowest);
+  color: var(--md-on-surface);
+  font: 400 15px/20px var(--md-font);
+  transition: border-color var(--md-dur-short) var(--md-ease-standard),
+              box-shadow var(--md-dur-short) var(--md-ease-standard);
+}
+.md-input:hover, .md-select:hover, .md-textarea:hover { border-color: var(--md-on-surface); }
+.md-input:focus, .md-select:focus, .md-textarea:focus {
+  outline: none;
+  border-color: var(--md-primary);
+  box-shadow: inset 0 0 0 1px var(--md-primary);
+}
+.md-input:disabled, .md-select:disabled {
+  background: color-mix(in srgb, var(--md-on-surface) 4%, transparent);
+  color: color-mix(in srgb, var(--md-on-surface) 38%, transparent);
+  cursor: not-allowed;
+}
+.md-textarea { min-height: 96px; resize: vertical; font-family: var(--md-font-mono); font-size: 13px; }
+.md-input--mono { font-family: var(--md-font-mono); }
+
+.md-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2371787d'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 20px;
+  padding-right: 44px;
+}
+
+/* ==========================================================================
+   9. SWITCH
+   ========================================================================== */
+
+.md-switch { display: inline-flex; align-items: center; gap: 12px; cursor: pointer; }
+.md-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.md-switch__track {
+  position: relative;
+  width: 52px; height: 32px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-surface-container-highest);
+  border: 2px solid var(--md-outline);
+  transition: background-color var(--md-dur-medium) var(--md-ease-standard),
+              border-color var(--md-dur-medium) var(--md-ease-standard);
+  flex: none;
+}
+.md-switch__thumb {
+  position: absolute;
+  top: 50%; left: 6px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--md-outline);
+  transform: translateY(-50%);
+  transition: transform var(--md-dur-medium) var(--md-ease-emphasized),
+              width var(--md-dur-medium) var(--md-ease-emphasized),
+              height var(--md-dur-medium) var(--md-ease-emphasized),
+              background-color var(--md-dur-medium) var(--md-ease-standard);
+}
+.md-switch input:checked + .md-switch__track {
+  background: var(--md-primary);
+  border-color: var(--md-primary);
+}
+.md-switch input:checked + .md-switch__track .md-switch__thumb {
+  transform: translate(20px, -50%);
+  width: 24px; height: 24px;
+  left: 2px;
+  background: var(--md-on-primary);
+}
+.md-switch input:focus-visible + .md-switch__track {
+  outline: 3px solid var(--md-primary);
+  outline-offset: 2px;
+}
+.md-switch__label { font: 500 14px/20px var(--md-font); }
+
+/* A switch that turns something dangerous ON gets the error colour, so the
+   pause control never looks like an ordinary preference. */
+.md-switch--danger input:checked + .md-switch__track {
+  background: var(--md-error);
+  border-color: var(--md-error);
+}
+.md-switch--danger input:checked + .md-switch__track .md-switch__thumb {
+  background: var(--md-on-error);
+}
+
+/* checkbox */
+.md-check { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.md-check input {
+  appearance: none;
+  width: 20px; height: 20px; margin: 0;
+  border: 2px solid var(--md-outline);
+  border-radius: 2px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  flex: none;
+}
+.md-check input:checked {
+  background: var(--md-primary);
+  border-color: var(--md-primary);
+}
+.md-check input:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px; top: 1px;
+  width: 5px; height: 10px;
+  border: solid var(--md-on-primary);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* ==========================================================================
+   10. TABLES
+   ========================================================================== */
+
+.md-table-wrap {
+  overflow-x: auto;
+  border-radius: var(--md-shape-md);
+  border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container-lowest);
+}
+.md-table { width: 100%; border-collapse: collapse; min-width: 560px; }
+.md-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left;
+  padding: 12px 16px;
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant);
+  font: 500 12px/16px var(--md-font);
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--md-outline-variant);
+}
+.md-table tbody td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--md-outline-variant);
+  font: 400 14px/20px var(--md-font);
+  vertical-align: middle;
+}
+.md-table tbody tr:last-child td { border-bottom: none; }
+.md-table tbody tr:hover { background: var(--md-surface-container-low); }
+.md-table td.num, .md-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.md-table td.mono { font-family: var(--md-font-mono); font-size: 13px; }
+.md-table--dense tbody td { padding: 8px 12px; }
+
+/* ==========================================================================
+   11. BANNERS
+   ========================================================================== */
+
+.md-banner {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding: 14px 18px;
+  border-radius: var(--md-shape-md);
+  margin-bottom: 16px;
+  font: 400 14px/20px var(--md-font);
+}
+.md-banner__icon { flex: none; font-size: 20px; line-height: 20px; }
+.md-banner__body { flex: 1; min-width: 0; }
+.md-banner__title { font-weight: 500; margin-bottom: 2px; }
+.md-banner__body ul { margin: 8px 0 0; padding-left: 20px; }
+.md-banner__body li { margin-bottom: 6px; }
+.md-banner--info    { background: var(--md-primary-container);   color: var(--md-on-primary-container); }
+.md-banner--good    { background: var(--md-success-container);   color: var(--md-on-success-container); }
+.md-banner--warn    { background: var(--md-warning-container);   color: var(--md-on-warning-container); }
+.md-banner--bad     { background: var(--md-error-container);     color: var(--md-on-error-container); }
+.md-banner--neutral { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
+
+/* ==========================================================================
+   12. PROGRESS
+   ========================================================================== */
+
+.md-progress {
+  height: 4px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-surface-container-highest);
+  overflow: hidden;
+}
+.md-progress__bar {
+  height: 100%;
+  background: var(--md-primary);
+  border-radius: var(--md-shape-full);
+  transition: width var(--md-dur-long) var(--md-ease-standard);
+}
+.md-progress__bar--good { background: var(--md-success); }
+.md-progress__bar--warn { background: var(--md-warning); }
+.md-progress__bar--bad  { background: var(--md-error); }
+
+/* indeterminate, for a run in progress */
+.md-progress--indeterminate .md-progress__bar {
+  width: 40%;
+  animation: md-indeterminate 1.6s var(--md-ease-standard) infinite;
+}
+@keyframes md-indeterminate {
+  0%   { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+
+/* ==========================================================================
+   13. DIVIDER, TOOLTIP, SNACKBAR
+   ========================================================================== */
+
+.md-divider { height: 1px; background: var(--md-outline-variant); border: none; margin: 20px 0; }
+
+.md-tooltip { position: relative; }
+.md-tooltip__text {
+  position: absolute;
+  bottom: calc(100% + 8px); left: 50%;
+  transform: translateX(-50%);
+  background: var(--md-inverse-surface);
+  color: var(--md-inverse-on-surface);
+  padding: 6px 10px;
+  border-radius: var(--md-shape-xs);
+  font: 400 12px/16px var(--md-font);
+  white-space: nowrap;
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--md-dur-short) var(--md-ease-standard);
+  z-index: 60;
+}
+.md-tooltip:hover .md-tooltip__text,
+.md-tooltip:focus-within .md-tooltip__text { opacity: 1; }
+
+.md-snackbar {
+  position: fixed;
+  left: 50%; bottom: 24px;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 16px;
+  min-height: 48px;
+  max-width: min(600px, calc(100vw - 32px));
+  padding: 12px 16px;
+  border-radius: var(--md-shape-xs);
+  background: var(--md-inverse-surface);
+  color: var(--md-inverse-on-surface);
+  box-shadow: var(--md-elev-3);
+  font: 400 14px/20px var(--md-font);
+  z-index: 80;
+  animation: md-snack-in var(--md-dur-medium) var(--md-ease-decelerate);
+}
+@keyframes md-snack-in {
+  from { transform: translate(-50%, 16px); opacity: 0; }
+  to   { transform: translate(-50%, 0);    opacity: 1; }
+}
+.md-snackbar--good { background: var(--md-success); color: var(--md-on-success); }
+.md-snackbar--warn { background: var(--md-warning); color: var(--md-on-warning); }
+.md-snackbar--bad  { background: var(--md-error);   color: var(--md-on-error); }
+.md-snackbar__close {
+  background: none; border: none; cursor: pointer;
+  color: inherit; font-size: 20px; line-height: 1;
+  padding: 4px 6px; border-radius: var(--md-shape-full); flex: none;
+}
+
+/* ==========================================================================
+   14. DIALOG
+   ========================================================================== */
+
+.md-dialog-scrim {
+  position: fixed; inset: 0;
+  background: var(--md-scrim);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  z-index: 100;
+}
+.md-dialog {
+  width: min(560px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface);
+  border-radius: var(--md-shape-xl);
+  box-shadow: var(--md-elev-5);
+  padding: 24px;
+}
+.md-dialog__title { font: 400 24px/32px var(--md-font); margin: 0 0 16px; }
+.md-dialog__actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 24px; }
+
+/* ==========================================================================
+   15. LAYOUT UTILITIES
+   ========================================================================== */
+
+.md-row     { display: flex; gap: 12px; align-items: center; }
+.md-row--wrap { flex-wrap: wrap; }
+.md-row--between { justify-content: space-between; }
+.md-row--end     { justify-content: flex-end; }
+.md-col     { display: flex; flex-direction: column; gap: 12px; }
+.md-grow    { flex: 1; min-width: 0; }
+.md-spacer  { flex: 1; }
+
+.md-grid { display: grid; gap: 16px; }
+.md-grid--2 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.md-grid--3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.md-grid--4 { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+
+.md-muted    { color: var(--md-on-surface-variant); }
+.md-nowrap   { white-space: nowrap; }
+.md-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-center   { text-align: center; }
+.md-right    { text-align: right; }
+
+.mt-0 { margin-top: 0; }    .mt-1 { margin-top: 8px; }   .mt-2 { margin-top: 16px; }
+.mt-3 { margin-top: 24px; } .mt-4 { margin-top: 32px; }
+.mb-0 { margin-bottom: 0; } .mb-1 { margin-bottom: 8px; } .mb-2 { margin-bottom: 16px; }
+.mb-3 { margin-bottom: 24px; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}

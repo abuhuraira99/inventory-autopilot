@@ -1,0 +1,41 @@
+{#
+  The error page.
+
+  Standalone rather than extending base.html, because the 500 handler must work
+  even when the database is the thing that broke -- and base.html needs a
+  session to render the navigation and the readiness banner.
+
+  It says the one thing that matters most here: a dashboard error has not
+  changed anything on Amazon, because writes only ever happen inside a run.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{{ heading }} &mdash; {{ app_name }}</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("autopilot-theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/md3.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-card" style="text-align:center">
+    <div class="md-display-small md-muted" style="margin-bottom:8px">{{ status_code }}</div>
+    <h1 class="md-headline-small" style="margin:0 0 12px">{{ heading }}</h1>
+    <p class="md-body-medium md-muted">{{ detail }}</p>
+    <div class="md-row" style="justify-content:center;margin-top:24px">
+      <a class="md-btn md-btn--filled" href="/">Back to the dashboard</a>
+    </div>
+  </div>
+</div>
+</body>
+</html>

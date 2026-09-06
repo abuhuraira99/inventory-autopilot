@@ -1,0 +1,160 @@
+{#
+  Undo preview.
+
+  An undo is itself a change to a live account, so it gets the same review as
+  the change it reverses -- and a typed confirmation, because it can move
+  thousands of listings from a standing start.
+#}
+{% extends "base.html" %}
+
+{% block title %}Undo batch {{ batch.id }} &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Undo batch {{ batch.id }}{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">{{ plan.summary() }}</p>
+{% endblock %}
+
+{% block content %}
+
+<div class="md-banner md-banner--warn">
+  <span class="md-banner__icon" aria-hidden="true">↺</span>
+  <div class="md-banner__body">
+    <div class="md-banner__title">What undoing does</div>
+    <p style="margin:6px 0 0">
+      Each product goes back to the quantity Amazon was showing immediately before
+      batch {{ batch.id }} changed it. Those values were recorded from Amazon itself,
+      not calculated, so this restores a state that genuinely existed.
+    </p>
+    <p style="margin:6px 0 0">
+      The undo is recorded as a new batch rather than as an edit, so the history stays
+      truthful &mdash; and the undo is itself undoable, which matters if the undo turns
+      out to be the mistake.
+    </p>
+  </div>
+</div>
+
+<div class="md-grid md-grid--3 mb-3">
+  <div class="tile tile--accent">
+    <span class="tile__label">Products to put back</span>
+    <span class="tile__value">{{ plan.count|n }}</span>
+  </div>
+  <div class="tile {{ 'tile--bad' if plan.to_zero }}">
+    <span class="tile__label">Of those, going to 0</span>
+    <span class="tile__value">{{ plan.to_zero|n }}</span>
+    <span class="tile__note">these were at 0 before the batch</span>
+  </div>
+  <div class="tile">
+    <span class="tile__label">Cannot be reversed</span>
+    <span class="tile__value">{{ plan.skipped|length|n }}</span>
+    <span class="tile__note">reasons listed below</span>
+  </div>
+</div>
+
+{% if plan.count %}
+  <div class="md-card md-card--elevated mb-3" style="border-left:4px solid var(--md-error)">
+    <div class="md-card__header">
+      <h2 class="md-card__title">Confirm</h2>
+    </div>
+    <div class="md-card__body">
+      <form method="post" action="/batches/{{ batch.id }}/undo" data-confirm-word="UNDO">
+        <div class="md-grid md-grid--2">
+          <div class="md-field" style="margin-bottom:0">
+            <label class="md-field__label" for="reason">Why are you undoing this? (optional)</label>
+            <input class="md-input" type="text" id="reason" name="reason"
+                   placeholder="e.g. the vendor sent a bad file">
+            <p class="md-field__help">Recorded in the audit trail.</p>
+          </div>
+          <div class="md-field" style="margin-bottom:0">
+            <label class="md-field__label" for="confirm">Type <strong>UNDO</strong> to confirm</label>
+            <input class="md-input md-input--mono" type="text" id="confirm" name="confirm"
+                   data-confirm-input autocomplete="off" placeholder="UNDO">
+            <p class="md-field__help">
+              The button stays disabled until this matches. Deliberate friction.
+            </p>
+          </div>
+        </div>
+        <div class="md-row md-row--end mt-2">
+          <a class="md-btn md-btn--text" href="/batches/{{ batch.id }}">Cancel</a>
+          <button class="md-btn md-btn--danger" type="submit" data-confirm-submit disabled>
+            Put {{ plan.count|n }} quantities back
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="md-card md-card--outlined mb-3">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">What would be sent</h2>
+        <p class="md-card__subtitle">
+          Showing {{ showing|n }} of {{ plan.count|n }}.
+        </p>
+      </div>
+    </div>
+    <div class="md-card__body md-card__body--flush">
+      <div class="md-table-wrap" style="border:none;border-radius:0">
+        <table class="md-table md-table--dense">
+          <thead>
+            <tr><th>SKU</th><th>Change</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            {% for change in changes %}
+              {% set direction = 'zero' if change.desired_quantity == 0
+                    else ('down' if change.current_quantity is not none and change.desired_quantity < change.current_quantity else 'up') %}
+              <tr>
+                <td class="mono">{{ change.seller_sku }}</td>
+                <td>
+                  <span class="qty qty--{{ direction }}">
+                    <span class="qty__from">{{ change.current_quantity if change.current_quantity is not none else '?' }}</span>
+                    <span class="qty__arrow" aria-hidden="true">&rarr;</span>
+                    <span class="qty__to">{{ change.desired_quantity }}</span>
+                  </span>
+                </td>
+                <td class="md-body-small md-muted">{{ change.reason }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="empty">
+    <div class="empty__icon" aria-hidden="true">↺</div>
+    <div class="empty__title">There is nothing to undo</div>
+    <p class="empty__body">
+      {{ plan.summary() }}
+      <br><br>
+      <a class="md-btn md-btn--outlined md-btn--small" href="/batches/{{ batch.id }}">
+        Back to the batch
+      </a>
+    </p>
+  </div>
+{% endif %}
+
+{% if plan.skipped %}
+  <details class="md-card md-card--outlined">
+    <summary class="md-card__header" style="cursor:pointer">
+      <div>
+        <h2 class="md-card__title">
+          {{ plan.skipped|length|n }} product{{ 's' if plan.skipped|length != 1 }} cannot be reversed
+        </h2>
+        <p class="md-card__subtitle">Each with the reason why.</p>
+      </div>
+    </summary>
+    <div class="md-card__body md-card__body--flush">
+      <div class="md-table-wrap" style="border:none;border-radius:0">
+        <table class="md-table md-table--dense">
+          <thead><tr><th>SKU</th><th>Why not</th></tr></thead>
+          <tbody>
+            {% for sku, why in plan.skipped[:200] %}
+              <tr><td class="mono">{{ sku }}</td><td class="md-body-small md-muted">{{ why }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </details>
+{% endif %}
+
+{% endblock %}

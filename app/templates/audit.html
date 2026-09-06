@@ -1,0 +1,106 @@
+{#
+  Who changed what, and when. Append-only.
+
+  With a single shared login the attribution is coarse, but knowing that a
+  change happened at all -- and being able to see exactly what it did -- is
+  most of the value.
+#}
+{% extends "base.html" %}
+
+{% block title %}Audit &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Audit trail{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">{{ total|n }} event{{ 's' if total != 1 }} recorded &middot; nothing is ever edited or deleted</p>
+{% endblock %}
+
+{% block content %}
+
+<div class="md-row md-row--wrap mb-2">
+  <a class="md-chip {{ 'md-chip--selected' if not action }}" href="/audit">Everything</a>
+  {% for a in actions %}
+    <a class="md-chip {{ 'md-chip--selected' if action == a }}" href="/audit?action={{ a }}">{{ a }}</a>
+  {% endfor %}
+</div>
+
+{% if rows %}
+  <div class="md-table-wrap">
+    <table class="md-table md-table--dense">
+      <thead>
+        <tr><th>When</th><th>What</th><th>Who</th><th>Target</th><th>Change</th></tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td class="md-nowrap md-body-small">
+              {{ row.at|dt(tz) }}
+              <div class="md-muted">{{ row.at|ago }}</div>
+            </td>
+            <td>
+              {% set tone = 'bad' if row.action in ['batch.rolled_back', 'killswitch.on', 'auth.failed', 'credential.deleted']
+                       else ('warn' if row.action in ['batch.rejected', 'setting.changed', 'auth.2fa_disabled']
+                       else ('good' if row.action in ['batch.approved', 'auth.login', 'auth.2fa_enabled'] else 'neutral')) %}
+              <span class="pill pill--{{ tone }}">{{ row.action }}</span>
+              {% if row.detail %}
+                <div class="md-body-small md-muted">{{ row.detail }}</div>
+              {% endif %}
+            </td>
+            <td class="md-body-small">
+              {{ row.actor }}
+              {% if row.actor_ip %}
+                <div class="md-muted mono">{{ row.actor_ip }}</div>
+              {% endif %}
+            </td>
+            <td class="mono md-body-small">{{ row.target or '&mdash;'|safe }}</td>
+            <td class="md-body-small">
+              {% if row.old_value is not none or row.new_value is not none %}
+                <span class="mono md-muted">
+                  {{ row.old_value.v if row.old_value and 'v' in row.old_value else (row.old_value or '') }}
+                </span>
+                {% if row.old_value is not none and row.new_value is not none %}
+                  <span aria-hidden="true"> &rarr; </span>
+                {% endif %}
+                <span class="mono"><strong>
+                  {{ row.new_value.v if row.new_value and 'v' in row.new_value else (row.new_value or '') }}
+                </strong></span>
+              {% else %}
+                <span class="md-muted">&mdash;</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pages > 1 %}
+    <div class="pager">
+      {% if page > 1 %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/audit?page={{ page - 1 }}{% if action %}&action={{ action }}{% endif %}">Previous</a>
+      {% endif %}
+      <span class="pager__info">Page {{ page }} of {{ pages|n }}</span>
+      {% if page < pages %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/audit?page={{ page + 1 }}{% if action %}&action={{ action }}{% endif %}">Next</a>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <p class="md-body-small md-muted mt-3">
+    Credential changes are recorded as having happened, but never with any part of the
+    value &mdash; not even the last four characters. An audit log is exactly the sort of
+    thing that gets exported and shared.
+  </p>
+
+{% else %}
+  <div class="empty">
+    <div class="empty__icon" aria-hidden="true">≡</div>
+    <div class="empty__title">Nothing recorded yet</div>
+    <p class="empty__body">
+      Settings changes, approvals, undos, sign-ins and credential updates all appear
+      here as they happen.
+    </p>
+  </div>
+{% endif %}
+
+{% endblock %}

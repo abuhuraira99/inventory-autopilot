@@ -1,0 +1,427 @@
+{#
+  The settings screen.
+
+  Every field is generated from app/core/settings_store.py, so adding a knob is
+  three lines in one file and it appears here with its label, help text, type
+  and bounds. There is no second place to update and no chance of the form and
+  the validation disagreeing.
+
+  Fields that directly change what gets written to a live account are marked
+  and given a left rule, so the difference between "keep reports for 90 days"
+  and "publish at most 15 units" is visible at a glance.
+#}
+{% extends "base.html" %}
+
+{% block title %}Settings &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Settings{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">
+    Everything here can be changed without a developer. Every change is recorded in the
+    <a href="/audit">audit trail</a>.
+  </p>
+{% endblock %}
+
+{% block content %}
+
+{% if error %}
+  <div class="md-banner md-banner--bad" role="alert">
+    <span class="md-banner__icon" aria-hidden="true">⚠</span>
+    <div class="md-banner__body">
+      <div class="md-banner__title">Nothing was saved</div>
+      <p style="margin:6px 0 0">{{ error }}</p>
+    </div>
+  </div>
+{% endif %}
+
+<div class="settings-layout">
+
+  {# ---- section index ------------------------------------------------- #}
+  <nav class="settings-nav" aria-label="Settings sections">
+    {% for key, title, _ in sections %}
+      <a href="#{{ key }}">{{ title }}</a>
+    {% endfor %}
+    <a href="#credentials">Credentials</a>
+    <a href="#mappings">Manual mappings</a>
+    <a href="#account">Your account</a>
+    <a href="#deployment">Server details</a>
+  </nav>
+
+  <div>
+
+    {# ================================================================
+       Behaviour
+       ================================================================ #}
+    <form method="post" action="/settings" data-dirty-guard>
+
+      <div class="md-row md-row--between mb-2" style="position:sticky;top:76px;z-index:20;
+           background:var(--md-surface);padding:10px 0">
+        <span class="md-body-small md-muted" data-dirty-indicator hidden>
+          You have unsaved changes.
+        </span>
+        <div class="md-spacer"></div>
+        <button class="md-btn md-btn--filled" type="submit">Save all settings</button>
+      </div>
+
+      {% for key, title, description in sections %}
+        {% if grouped.get(key) %}
+          <section id="{{ key }}" class="md-card md-card--outlined mb-3">
+            <div class="md-card__header">
+              <div>
+                <h2 class="md-card__title">{{ title }}</h2>
+                <p class="md-card__subtitle">{{ description }}</p>
+              </div>
+            </div>
+            <div class="md-card__body">
+              {% for spec in grouped[key] %}
+                {% set value = values.get(spec.key) %}
+                <div class="setting {% if spec.high_impact %}setting--impact{% endif %}
+                            {% if spec.locked %}setting--locked{% endif %}">
+
+                  <div class="setting__head">
+                    <label class="md-title-small" for="f-{{ spec.key }}" style="margin:0">
+                      {{ spec.label }}
+                    </label>
+                    {% if spec.high_impact %}
+                      <span class="badge-impact" title="Changing this changes what is written to the live Amazon account.">
+                        affects live listings
+                      </span>
+                    {% endif %}
+                    {% if spec.locked %}
+                      <span class="badge-locked" title="Built-in safety rule. Cannot be changed here.">
+                        locked
+                      </span>
+                    {% endif %}
+                  </div>
+
+                  <p class="md-field__help" style="margin-top:6px">{{ spec.help_text }}</p>
+
+                  <div class="setting__control {% if spec.value_type in ['list[str]', 'json'] %}setting__control--wide{% endif %}">
+
+                    {# ---- boolean: a switch ------------------------- #}
+                    {% if spec.value_type == 'bool' %}
+                      <label class="md-switch {% if spec.key == 'paused' %}md-switch--danger{% endif %}">
+                        <input type="checkbox" id="f-{{ spec.key }}" name="{{ spec.key }}"
+                               {% if value %}checked{% endif %}
+                               {% if spec.locked %}disabled{% endif %}>
+                        <span class="md-switch__track"><span class="md-switch__thumb"></span></span>
+                        <span class="md-switch__label">
+                          {{ 'On' if value else 'Off' }}
+                        </span>
+                      </label>
+                      {% if spec.locked %}
+                        {# Disabled inputs are not submitted, so the value would be
+                           read as "off". Preserve it explicitly. #}
+                        <input type="hidden" name="{{ spec.key }}" value="{{ 'on' if value else 'off' }}">
+                      {% endif %}
+
+                    {# ---- enum: a select ---------------------------- #}
+                    {% elif spec.value_type == 'enum' %}
+                      <select class="md-select" id="f-{{ spec.key }}" name="{{ spec.key }}"
+                              {% if spec.locked %}disabled{% endif %}>
+                        {% for choice in spec.choices %}
+                          <option value="{{ choice }}" {% if value == choice %}selected{% endif %}>
+                            {{ choice|label }}
+                          </option>
+                        {% endfor %}
+                      </select>
+
+                    {# ---- list: a textarea, one per line ------------ #}
+                    {% elif spec.value_type == 'list[str]' %}
+                      <textarea class="md-textarea" id="f-{{ spec.key }}" name="{{ spec.key }}"
+                                rows="{{ [3, (value|length) + 1]|max }}"
+                                placeholder="One per line">{{ value|join('\n') if value else '' }}</textarea>
+                      <p class="md-field__help">One per line, or separated by commas.</p>
+
+                    {# ---- json ------------------------------------- #}
+                    {% elif spec.value_type == 'json' %}
+                      <textarea class="md-textarea" id="f-{{ spec.key }}" name="{{ spec.key }}"
+                                rows="4">{{ value|tojson(indent=2) if value else '{}' }}</textarea>
+
+                    {# ---- numbers and text ------------------------- #}
+                    {% else %}
+                      <input class="md-input {% if spec.value_type in ['int','float'] %}md-input--mono{% endif %}"
+                             id="f-{{ spec.key }}" name="{{ spec.key }}"
+                             type="{{ 'number' if spec.value_type in ['int','float'] else 'text' }}"
+                             value="{{ value if value is not none else '' }}"
+                             {% if spec.value_type == 'float' %}step="0.1"{% endif %}
+                             {% if spec.min_value is not none %}min="{{ spec.min_value }}"{% endif %}
+                             {% if spec.max_value is not none %}max="{{ spec.max_value }}"{% endif %}
+                             {% if spec.locked %}readonly{% endif %}>
+                      {% if spec.min_value is not none or spec.max_value is not none %}
+                        <p class="md-field__help">
+                          Allowed range: {{ spec.min_value if spec.min_value is not none else 'any' }}
+                          to {{ spec.max_value if spec.max_value is not none else 'any' }}.
+                        </p>
+                      {% endif %}
+                    {% endif %}
+
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </section>
+        {% endif %}
+      {% endfor %}
+
+      <div class="md-row md-row--end mb-3">
+        <button class="md-btn md-btn--filled" type="submit">Save all settings</button>
+      </div>
+    </form>
+
+    {# ================================================================
+       Credentials
+       ================================================================ #}
+    <section id="credentials" class="md-card md-card--outlined mb-3">
+      <div class="md-card__header">
+        <div>
+          <h2 class="md-card__title">Credentials</h2>
+          <p class="md-card__subtitle">
+            Encrypted the moment they are saved, and never shown again.
+          </p>
+        </div>
+        <div class="md-row">
+          <form method="post" action="/settings/test-vendor">
+            <button class="md-btn md-btn--outlined md-btn--small" type="submit">
+              Test the vendor connection
+            </button>
+          </form>
+          <form method="post" action="/settings/test-amazon">
+            <button class="md-btn md-btn--outlined md-btn--small" type="submit">
+              Test Amazon
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div class="md-card__body">
+        <div class="md-banner md-banner--info">
+          <span class="md-banner__icon" aria-hidden="true">🔒</span>
+          <div class="md-banner__body">
+            <div class="md-banner__title">Type your own credentials here</div>
+            <p style="margin:6px 0 0">
+              That way your developer never receives them and never can. After saving,
+              this page can only show the last four characters &mdash; there is no code
+              path in the system that returns a stored secret to a browser.
+            </p>
+            <p style="margin:6px 0 0">
+              Never send these through WhatsApp, email or a screenshot. If one has to
+              travel between people, use a password manager's one-time expiring link.
+            </p>
+          </div>
+        </div>
+
+        {% for credential in credentials %}
+          <div class="setting">
+            <div class="setting__head">
+              <span class="md-title-small">{{ credential.label }}</span>
+              {% if credential.is_set %}
+                <span class="pill pill--good">Set</span>
+                <span class="md-body-small md-muted mono">{{ credential.hint }}</span>
+                <span class="md-body-small md-muted">from the {{ credential.source }}</span>
+              {% else %}
+                <span class="pill pill--bad">Not set</span>
+                <span class="md-body-small md-muted">needed for {{ credential.required_for }}</span>
+              {% endif %}
+            </div>
+
+            <p class="md-field__help" style="margin-top:6px">{{ credential.help_text }}</p>
+
+            <form method="post" action="/settings/credentials" class="md-row md-row--wrap"
+                  style="margin-top:10px" autocomplete="off">
+              <input type="hidden" name="key" value="{{ credential.key }}">
+              <input class="md-input md-input--mono md-grow" type="password" name="value"
+                     style="min-width:260px"
+                     placeholder="{{ 'Replace with a new value' if credential.is_set else 'Paste the value' }}"
+                     autocomplete="new-password"
+                     aria-label="{{ credential.label }}">
+              <button class="md-btn md-btn--tonal" type="submit">
+                {{ 'Replace' if credential.is_set else 'Save' }}
+              </button>
+              {% if credential.source == 'dashboard' %}
+                <button class="md-btn md-btn--text" type="submit"
+                        formaction="/settings/credentials/delete"
+                        data-confirm="Remove {{ credential.label }}? The system will fall back to the value in the server's .env file, if there is one.">
+                  Remove
+                </button>
+              {% endif %}
+            </form>
+
+            {% if credential.updated_at %}
+              <p class="md-body-small md-muted" style="margin:8px 0 0">
+                Last changed {{ credential.updated_at }} by {{ credential.updated_by }}.
+              </p>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    {# ================================================================
+       Manual mappings
+       ================================================================ #}
+    <section id="mappings" class="md-card md-card--outlined mb-3">
+      <div class="md-card__header">
+        <div>
+          <h2 class="md-card__title">Manual barcode mappings</h2>
+          <p class="md-card__subtitle">
+            For the few products the automatic rules cannot match. The SKU is still
+            checked for existence before it is used, so a typo is caught rather than
+            acted on.
+          </p>
+        </div>
+      </div>
+      <div class="md-card__body">
+        <form method="post" action="/settings/override" class="md-row md-row--wrap mb-2">
+          <div class="md-grow" style="min-width:170px">
+            <input class="md-input md-input--mono" type="text" name="barcode"
+                   placeholder="Barcode" required aria-label="Barcode">
+          </div>
+          <div class="md-grow" style="min-width:220px">
+            <input class="md-input md-input--mono" type="text" name="seller_sku"
+                   placeholder="HA-AMS-0008811065126" required aria-label="Amazon SKU">
+          </div>
+          <div class="md-grow" style="min-width:170px">
+            <input class="md-input" type="text" name="note" placeholder="Note (optional)"
+                   aria-label="Note">
+          </div>
+          <button class="md-btn md-btn--tonal" type="submit">Add</button>
+        </form>
+
+        <p class="md-field__help">
+          The barcode can be typed with or without leading zeros &mdash; it is normalised
+          to the 13-digit form before being stored, so it will match whichever way the
+          vendor sends it.
+        </p>
+
+        {% if overrides %}
+          <div class="md-table-wrap mt-2">
+            <table class="md-table md-table--dense">
+              <thead><tr><th>Barcode</th><th>Maps to SKU</th><th>Note</th><th></th></tr></thead>
+              <tbody>
+                {% for override in overrides %}
+                  <tr>
+                    <td class="mono">{{ override.barcode }}</td>
+                    <td class="mono">{{ override.seller_sku }}</td>
+                    <td class="md-body-small md-muted">{{ override.note }}</td>
+                    <td class="md-right">
+                      <form method="post" action="/settings/override/delete">
+                        <input type="hidden" name="barcode" value="{{ override.barcode }}">
+                        <button class="md-btn md-btn--text md-btn--small" type="submit">Remove</button>
+                      </form>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="md-body-small md-muted mt-2" style="margin-bottom:0">
+            None yet. The automatic rules match 99.5% of this account's in-scope
+            listings, so this list should stay short.
+          </p>
+        {% endif %}
+      </div>
+    </section>
+
+    {# ================================================================
+       Account
+       ================================================================ #}
+    <section id="account" class="md-card md-card--outlined mb-3">
+      <div class="md-card__header">
+        <div>
+          <h2 class="md-card__title">Your account</h2>
+          <p class="md-card__subtitle">
+            {{ user.email if user else '' }}
+            {% if user_record and user_record.totp_enabled %}
+              &middot; <span class="pill pill--good">Two-factor on</span>
+            {% else %}
+              &middot; <span class="pill pill--warn">Two-factor off</span>
+            {% endif %}
+          </p>
+        </div>
+      </div>
+      <div class="md-card__body">
+
+        <h3 class="mb-1">Change your password</h3>
+        <form method="post" action="/settings/password" autocomplete="off">
+          <div class="md-grid md-grid--3">
+            <div class="md-field" style="margin-bottom:0">
+              <label class="md-field__label" for="current_password">Current password</label>
+              <input class="md-input" type="password" id="current_password"
+                     name="current_password" required autocomplete="current-password">
+            </div>
+            <div class="md-field" style="margin-bottom:0">
+              <label class="md-field__label" for="new_password">New password</label>
+              <input class="md-input" type="password" id="new_password" name="new_password"
+                     required minlength="12" autocomplete="new-password">
+            </div>
+            <div class="md-field" style="margin-bottom:0">
+              <label class="md-field__label" for="confirm_password">Repeat it</label>
+              <input class="md-input" type="password" id="confirm_password"
+                     name="confirm_password" required minlength="12" autocomplete="new-password">
+            </div>
+          </div>
+          <p class="md-field__help">
+            At least 12 characters. Three or four unrelated words is both strong and easy
+            to remember.
+          </p>
+          <div class="md-row md-row--end">
+            <button class="md-btn md-btn--tonal" type="submit">Change password</button>
+          </div>
+        </form>
+
+        <hr class="md-divider">
+
+        <h3 class="mb-1">Two-factor authentication</h3>
+        {% if user_record and user_record.totp_enabled %}
+          <p class="md-body-medium md-muted">
+            On. A six-digit code from your authenticator app is required at every sign-in.
+          </p>
+          <form method="post" action="/settings/2fa/disable" class="md-row">
+            <input class="md-input" type="password" name="password" required
+                   placeholder="Your password" style="max-width:240px"
+                   aria-label="Your password">
+            <button class="md-btn md-btn--danger-outlined" type="submit"
+                    data-confirm="Turn off two-factor authentication? A leaked password would then be enough to reach this dashboard on its own.">
+              Turn off
+            </button>
+          </form>
+        {% else %}
+          <p class="md-body-medium md-muted">
+            Strongly recommended, and especially so for a shared login: it makes a leaked
+            password insufficient on its own.
+          </p>
+          <form method="post" action="/settings/2fa/start">
+            <button class="md-btn md-btn--filled" type="submit">Set up two-factor</button>
+          </form>
+        {% endif %}
+      </div>
+    </section>
+
+    {# ================================================================
+       Deployment facts
+       ================================================================ #}
+    <section id="deployment" class="md-card md-card--outlined mb-3">
+      <div class="md-card__header">
+        <div>
+          <h2 class="md-card__title">Server details</h2>
+          <p class="md-card__subtitle">
+            Read-only. These identify the account and the machine, so changing one means
+            editing the server's .env file and restarting.
+          </p>
+        </div>
+      </div>
+      <div class="md-card__body">
+        <dl class="kv">
+          {% for label, value in env_facts.items() %}
+            <dt>{{ label }}</dt>
+            <dd class="mono">{{ value }}</dd>
+          {% endfor %}
+        </dl>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,83 @@
+{#
+  The login page.
+
+  Deliberately shows nothing about the account: no pause state, no readiness
+  banner, no navigation. All of that is information, and information belongs
+  behind the login.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Sign in &mdash; {{ app_name }}</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("autopilot-theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/md3.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2300658b'/><text x='16' y='23' font-size='18' font-family='sans-serif' font-weight='600' fill='white' text-anchor='middle'>IA</text></svg>">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-card">
+
+    <div class="login-brand">
+      <span class="login-brand__logo" aria-hidden="true">IA</span>
+      <h1 class="md-headline-small" style="margin:0">Inventory Autopilot</h1>
+      <p class="md-body-small md-muted" style="margin:0;text-align:center">
+        Vendor stock, kept in step with Amazon
+      </p>
+    </div>
+
+    {% if error %}
+      <div class="md-banner md-banner--bad" role="alert">
+        <span class="md-banner__icon" aria-hidden="true">⚠</span>
+        <div class="md-banner__body">{{ error }}</div>
+      </div>
+    {% endif %}
+
+    <form method="post" action="/login" autocomplete="on">
+      <input type="hidden" name="next" value="{{ next }}">
+
+      <div class="md-field">
+        <label class="md-field__label" for="email">Email</label>
+        <input class="md-input" type="email" id="email" name="email"
+               required autocomplete="username" autofocus
+               placeholder="admin@localhost">
+      </div>
+
+      <div class="md-field">
+        <label class="md-field__label" for="password">Password</label>
+        <input class="md-input" type="password" id="password" name="password"
+               required autocomplete="current-password">
+      </div>
+
+      <div class="md-field">
+        <label class="md-field__label" for="totp_code">
+          Six-digit code
+          <span class="md-muted" style="font-weight:400">&mdash; only if two-factor is on</span>
+        </label>
+        <input class="md-input md-input--mono" type="text" id="totp_code" name="totp_code"
+               inputmode="numeric" pattern="[0-9 ]*" maxlength="9"
+               autocomplete="one-time-code" placeholder="000000">
+      </div>
+
+      <button class="md-btn md-btn--filled md-btn--block" type="submit">Sign in</button>
+    </form>
+
+    <p class="login-note">
+      This dashboard can change stock quantities on a live Amazon account.
+      It never changes prices.
+    </p>
+  </div>
+</div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

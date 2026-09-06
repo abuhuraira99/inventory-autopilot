@@ -1,0 +1,413 @@
+{#
+  The status page.
+
+  Ordered by urgency, not by category:
+    1. anything waiting for a human
+    2. how far apart Amazon and the vendor are right now  <- the whole point
+    3. the controls
+    4. the numbers
+    5. recent history
+
+  Somebody opening this at 6am should know in three seconds whether they need
+  to do anything.
+#}
+{% extends "base.html" %}
+
+{% block title %}Status &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Status{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">
+    {% if last_run %}
+      Last check {{ last_run.started_at|ago }} &middot; {{ last_run.status|label }}
+    {% else %}
+      Nothing has run yet
+    {% endif %}
+  </p>
+{% endblock %}
+
+{% block appbar_actions %}
+  <form method="post" action="/actions/run-now" style="display:inline">
+    <button class="md-btn md-btn--filled md-btn--small" type="submit">
+      Check now
+    </button>
+  </form>
+  <form method="post" action="/actions/pause" style="display:inline">
+    <button class="md-btn md-btn--small {{ 'md-btn--filled' if paused else 'md-btn--danger-outlined' }}"
+            type="submit">
+      {{ 'Resume' if paused else 'Pause everything' }}
+    </button>
+  </form>
+{% endblock %}
+
+{% block content %}
+
+{# =====================================================================
+   1. NEEDS A PERSON
+   ===================================================================== #}
+
+{% if awaiting %}
+  <div class="md-card md-card--elevated mb-2" style="border-left:4px solid var(--md-warning)">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">
+          {{ awaiting|length }} batch{{ 'es' if awaiting|length != 1 }} waiting for your approval
+        </h2>
+        <p class="md-card__subtitle">
+          Nothing has been sent to Amazon. Review the changes, then approve or decline.
+        </p>
+      </div>
+    </div>
+    <div class="md-card__body md-card__body--flush">
+      <div class="md-table-wrap" style="border:none;border-radius:0">
+        <table class="md-table">
+          <thead>
+            <tr>
+              <th>Prepared</th>
+              <th class="num">Changes</th>
+              <th class="num">Going off sale</th>
+              <th class="num">Raised</th>
+              <th class="num">Reduced</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for batch in awaiting %}
+              <tr>
+                <td>
+                  {{ batch.created_at|dt(tz) }}
+                  <div class="md-body-small md-muted">from run {{ batch.run_id }}</div>
+                </td>
+                <td class="num"><strong>{{ batch.item_count|n }}</strong></td>
+                <td class="num">
+                  {% if batch.zeroing_count %}
+                    <span class="pill pill--bad">{{ batch.zeroing_count|n }}</span>
+                  {% else %}&mdash;{% endif %}
+                </td>
+                <td class="num">{{ batch.raising_count|n }}</td>
+                <td class="num">{{ batch.lowering_count|n }}</td>
+                <td class="md-right md-nowrap">
+                  <a class="md-btn md-btn--tonal md-btn--small" href="/batches/{{ batch.id }}">
+                    Review
+                  </a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{% if halted %}
+  <div class="md-banner md-banner--warn" role="alert">
+    <span class="md-banner__icon" aria-hidden="true">◼</span>
+    <div class="md-banner__body">
+      <div class="md-banner__title">
+        {{ halted|length }} run{{ 's' if halted|length != 1 }} stopped by a safety rule
+      </div>
+      <p style="margin:6px 0 0">
+        Nothing was sent to Amazon. A safety rule stops a run rather than letting it
+        proceed with something that looks wrong.
+      </p>
+      <ul>
+        {% for run in halted %}
+          <li>
+            <a href="/runs/{{ run.id }}">Run {{ run.id }}</a>
+            &middot; {{ run.started_at|ago }} &middot;
+            {{ (run.guardrail_message or '').split('\n')[0] }}
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+{% endif %}
+
+{% if alerts %}
+  <div class="md-card md-card--outlined mb-2">
+    <div class="md-card__header">
+      <h2 class="md-card__title">Alerts</h2>
+      <form method="post" action="/actions/acknowledge-all">
+        <button class="md-btn md-btn--text md-btn--small" type="submit">Dismiss all</button>
+      </form>
+    </div>
+    <div class="md-card__body">
+      {% for alert in alerts %}
+        <div class="md-row" style="padding:8px 0;border-bottom:1px solid var(--md-outline-variant)">
+          <span class="pill pill--{{ 'bad' if alert.severity == 'critical' else 'warn' }}">
+            {{ alert.severity }}
+          </span>
+          <div class="md-grow">
+            <strong>{{ alert.subject }}</strong>
+            <div class="md-body-small md-muted">{{ alert.at|ago }}</div>
+          </div>
+          <form method="post" action="/actions/acknowledge/{{ alert.id }}">
+            <button class="md-icon-btn" type="submit" aria-label="Dismiss">&times;</button>
+          </form>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+
+{# =====================================================================
+   2. HOW FAR APART ARE AMAZON AND THE VENDOR?
+   =====================================================================
+   The number this whole system exists to reduce, so it gets the most
+   prominent card on the page. #}
+
+<div class="md-card md-card--elevated mb-3">
+  <div class="md-card__header">
+    <div>
+      <h2 class="md-card__title">Amazon against the vendor, right now</h2>
+      <p class="md-card__subtitle">
+        Measured directly from the two catalogues, not from run history &mdash; so this is
+        current even if nothing has run yet.
+      </p>
+    </div>
+    <form method="post" action="/actions/refresh-catalog">
+      <button class="md-btn md-btn--outlined md-btn--small" type="submit">
+        Refresh Amazon catalogue
+      </button>
+    </form>
+  </div>
+
+  <div class="md-card__body">
+    {% if drift.measured %}
+      <div class="md-grid md-grid--4 mb-2">
+        <div class="tile {{ 'tile--bad' if drift.need_zero else 'tile--good' }}">
+          <span class="tile__label">Selling with no stock</span>
+          <span class="tile__value">{{ drift.need_zero|n }}</span>
+          <span class="tile__note">
+            {% if drift.need_zero %}
+              Amazon is still selling these. Each one risks a cancelled order.
+            {% else %}
+              Nothing is on sale that the vendor has run out of.
+            {% endif %}
+          </span>
+        </div>
+
+        <div class="tile {{ 'tile--warn' if drift.differs else 'tile--good' }}">
+          <span class="tile__label">Quantities that differ</span>
+          <span class="tile__value">{{ drift.differs|n }}</span>
+          <span class="tile__note">Amazon shows a different number from the vendor</span>
+        </div>
+
+        <div class="tile tile--good">
+          <span class="tile__label">Already in step</span>
+          <span class="tile__value">{{ drift.in_step|n }}</span>
+          <span class="tile__note">{{ drift.percent_in_step }}% of matched listings</span>
+        </div>
+
+        <div class="tile">
+          <span class="tile__label">Matched listings</span>
+          <span class="tile__value">{{ drift.matched|n }}</span>
+          <span class="tile__note">in scope and found in the vendor's feed</span>
+        </div>
+      </div>
+
+      <div class="md-progress" role="img"
+           aria-label="{{ drift.percent_in_step }} percent of listings are in step with the vendor">
+        <div class="md-progress__bar {{ 'md-progress__bar--good' if drift.percent_in_step > 90 else 'md-progress__bar--warn' }}"
+             style="width: {{ drift.percent_in_step }}%"></div>
+      </div>
+      <p class="md-body-small md-muted mt-1">
+        {{ drift.percent_in_step }}% of matched listings currently agree with the vendor.
+        {% if drift.differs %}
+          The system works through the difference at up to
+          {{ cfg.max_changes_per_run|n }} products per run.
+        {% endif %}
+      </p>
+
+    {% else %}
+      <div class="empty" style="padding:32px 16px">
+        <div class="empty__icon" aria-hidden="true">◎</div>
+        <div class="empty__title">Not measured yet</div>
+        <p class="empty__body">
+          This needs both sides: Amazon's catalogue and at least one vendor feed.
+          Use <strong>Refresh Amazon catalogue</strong> above and <strong>Check now</strong>
+          to download a feed, and the comparison will appear here.
+        </p>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{# =====================================================================
+   3. THE NUMBERS
+   ===================================================================== #}
+
+<h2 class="md-title-medium mb-1">Last 24 hours</h2>
+<div class="md-grid md-grid--4 mb-3">
+  <div class="tile tile--accent">
+    <span class="tile__label">Quantities updated</span>
+    <span class="tile__value" data-live="last_24h.pushed">{{ stats.pushed_24h|n }}</span>
+    <span class="tile__note">sent to Amazon and accepted</span>
+  </div>
+  <div class="tile">
+    <span class="tile__label">Checks run</span>
+    <span class="tile__value" data-live="last_24h.runs">{{ stats.runs_24h|n }}</span>
+    <span class="tile__note">every {{ cfg.sync_interval_minutes }} minutes</span>
+  </div>
+  <div class="tile">
+    <span class="tile__label">Vendor files handled</span>
+    <span class="tile__value">{{ stats.files_24h|n }}</span>
+    <span class="tile__note">full feeds and deltas</span>
+  </div>
+  <div class="tile">
+    <span class="tile__label">Product rows read</span>
+    <span class="tile__value tile__value--sm">{{ stats.rows_24h|n }}</span>
+    <span class="tile__note">a full feed is about 1.15 million</span>
+  </div>
+</div>
+
+<h2 class="md-title-medium mb-1">Catalogue</h2>
+<div class="md-grid md-grid--4 mb-3">
+  <div class="tile">
+    <span class="tile__label">Listings in scope</span>
+    <span class="tile__value" data-live="counts.listings_in_scope">{{ stats.listings_in_scope|n }}</span>
+    <span class="tile__note">
+      {{ cfg.sku_prefixes_in_scope|join(', ') }}
+      &middot; {{ stats.listings_total|n }} on the account in total
+    </span>
+  </div>
+  <div class="tile">
+    <span class="tile__label">Vendor products in stock</span>
+    <span class="tile__value" data-live="counts.vendor_in_stock">{{ stats.vendor_in_stock|n }}</span>
+    <span class="tile__note">of {{ stats.vendor_total|n }} in their catalogue</span>
+  </div>
+  <div class="tile {{ 'tile--warn' if stats.unmatched_open > 0 else '' }}">
+    <span class="tile__label">In stock but not listed</span>
+    <span class="tile__value" data-live="needs_attention.unmatched_in_stock">{{ stats.unmatched_open|n }}</span>
+    <span class="tile__note">
+      <a href="/unmatched">listing opportunities</a> &mdash; never changed by this system
+    </span>
+  </div>
+  <div class="tile">
+    <span class="tile__label">Amazon catalogue refreshed</span>
+    <span class="tile__value tile__value--sm">
+      {% if last_catalog %}{{ last_catalog.finished_at|ago }}{% else %}Never{% endif %}
+    </span>
+    <span class="tile__note">
+      {% if last_catalog %}
+        {{ last_catalog.listing_count|n }} listings
+      {% else %}
+        Run a refresh before enabling any sending
+      {% endif %}
+    </span>
+  </div>
+</div>
+
+{# =====================================================================
+   4. RECENT ACTIVITY
+   ===================================================================== #}
+
+<div class="md-grid" style="grid-template-columns:repeat(auto-fit,minmax(400px,1fr))">
+
+  <div class="md-card md-card--outlined">
+    <div class="md-card__header">
+      <h2 class="md-card__title">Recent checks</h2>
+      <a class="md-btn md-btn--text md-btn--small" href="/runs">See all</a>
+    </div>
+    <div class="md-card__body md-card__body--flush">
+      {% if recent_runs %}
+        <div class="md-table-wrap" style="border:none;border-radius:0">
+          <table class="md-table md-table--dense">
+            <thead>
+              <tr>
+                <th>When</th><th>Result</th>
+                <th class="num">Changed</th><th class="num">Took</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for run in recent_runs %}
+                <tr>
+                  <td>
+                    <a href="/runs/{{ run.id }}">{{ run.started_at|dt(tz) }}</a>
+                    <div class="md-body-small md-muted">
+                      {{ run.trigger.value }}{% if run.triggered_by != 'scheduler' %} &middot; {{ run.triggered_by }}{% endif %}
+                    </div>
+                  </td>
+                  <td><span class="pill pill--{{ run.status|tone }}">{{ run.status|label }}</span></td>
+                  <td class="num">
+                    {% if run.pushed_changes %}{{ run.pushed_changes|n }}
+                    {% elif run.proposed_changes %}<span class="md-muted">{{ run.proposed_changes|n }} proposed</span>
+                    {% else %}&mdash;{% endif %}
+                  </td>
+                  <td class="num md-muted">{{ run.duration_seconds|duration }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty">
+          <div class="empty__icon" aria-hidden="true">↻</div>
+          <div class="empty__title">Nothing has run yet</div>
+          <p class="empty__body">
+            Press <strong>Check now</strong> to download the vendor's files and see what
+            the system would do. In practice mode nothing is sent to Amazon.
+          </p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="md-card md-card--outlined">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">Vendor files</h2>
+        <p class="md-card__subtitle">
+          A full feed arrives daily; deltas about every five minutes.
+        </p>
+      </div>
+    </div>
+    <div class="md-card__body md-card__body--flush">
+      {% if recent_files %}
+        <div class="md-table-wrap" style="border:none;border-radius:0">
+          <table class="md-table md-table--dense">
+            <thead>
+              <tr><th>File</th><th>Type</th><th>Result</th><th class="num">Rows</th></tr>
+            </thead>
+            <tbody>
+              {% for file in recent_files %}
+                <tr>
+                  <td class="mono md-truncate" style="max-width:250px" title="{{ file.filename }}">
+                    {{ file.filename }}
+                  </td>
+                  <td>
+                    <span class="pill pill--{{ 'info' if file.kind.value == 'full' else 'neutral' }}">
+                      {{ file.kind|label }}
+                    </span>
+                  </td>
+                  <td>
+                    <span class="pill pill--{{ file.status|tone }}">{{ file.status|label }}</span>
+                    {% if file.quarantine_reason %}
+                      <div class="md-body-small md-muted md-truncate" style="max-width:220px"
+                           title="{{ file.quarantine_reason }}">
+                        {{ file.quarantine_reason.split('\n')[0] }}
+                      </div>
+                    {% endif %}
+                  </td>
+                  <td class="num">{{ file.row_count|n }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty">
+          <div class="empty__icon" aria-hidden="true">▤</div>
+          <div class="empty__title">No files yet</div>
+          <p class="empty__body">
+            Files appear here once the vendor connection is working. Use
+            <strong>Test connection</strong> on the Settings page to check it.
+          </p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}

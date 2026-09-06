@@ -1,0 +1,157 @@
+{# Run history. #}
+{% extends "base.html" %}
+
+{% block title %}Runs &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Runs{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">{{ total|n }} run{{ 's' if total != 1 }} recorded</p>
+{% endblock %}
+
+{% block appbar_actions %}
+  <form method="post" action="/actions/run-now" style="display:inline">
+    <button class="md-btn md-btn--filled md-btn--small" type="submit">Check now</button>
+  </form>
+  <form method="post" action="/actions/run-now" style="display:inline">
+    <input type="hidden" name="reconcile" value="1">
+    <button class="md-btn md-btn--outlined md-btn--small" type="submit"
+            title="Re-check every listing in scope, not only the products the newest feed mentioned. This is what finds a backlog that built up over time.">
+      Reconcile everything
+    </button>
+  </form>
+{% endblock %}
+
+{% block content %}
+
+<div class="md-row md-row--wrap mb-2">
+  <a class="md-chip {{ 'md-chip--selected' if not status_filter }}" href="/runs">All</a>
+  {% for s in statuses %}
+    <a class="md-chip {{ 'md-chip--selected' if status_filter == s }}" href="/runs?status={{ s }}">
+      {{ s|label }}
+    </a>
+  {% endfor %}
+</div>
+
+{% if runs %}
+  <div class="md-table-wrap">
+    <table class="md-table">
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Result</th>
+          <th>Mode</th>
+          <th class="num">Files</th>
+          <th class="num">Rows read</th>
+          <th class="num">Proposed</th>
+          <th class="num">Sent</th>
+          <th class="num">Took</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+          <tr>
+            <td>
+              <a href="/runs/{{ run.id }}"><strong>{{ run.id }}</strong></a>
+              <div class="md-body-small md-muted">
+                {{ run.started_at|dt(tz) }} &middot; {{ run.trigger.value }}
+                {% if run.triggered_by != 'scheduler' %}by {{ run.triggered_by }}{% endif %}
+              </div>
+            </td>
+            <td>
+              <span class="pill pill--{{ run.status|tone }}">{{ run.status|label }}</span>
+              {% if run.guardrail_message %}
+                <div class="md-body-small md-muted md-truncate" style="max-width:340px"
+                     title="{{ run.guardrail_message }}">
+                  {{ run.guardrail_message.split('\n')[0] }}
+                </div>
+              {% endif %}
+              {% if run.error %}
+                <div class="md-body-small md-truncate" style="max-width:340px;color:var(--md-error)"
+                     title="{{ run.error }}">{{ run.error.split('\n')[0] }}</div>
+              {% endif %}
+            </td>
+            <td class="md-nowrap">{{ run.mode|label }}</td>
+            <td class="num">{{ run.files_processed|n }}</td>
+            <td class="num">{{ run.rows_read|n }}</td>
+            <td class="num">{{ run.proposed_changes|n }}</td>
+            <td class="num">
+              {% if run.pushed_changes %}<strong>{{ run.pushed_changes|n }}</strong>
+              {% else %}<span class="md-muted">&mdash;</span>{% endif %}
+            </td>
+            <td class="num md-muted">{{ run.duration_seconds|duration }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pages > 1 %}
+    <div class="pager">
+      {% if page > 1 %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/runs?page={{ page - 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Previous</a>
+      {% endif %}
+      <span class="pager__info">Page {{ page }} of {{ pages }}</span>
+      {% if page < pages %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/runs?page={{ page + 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Next</a>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <div class="md-card md-card--outlined mt-3">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">Undo recent changes</h2>
+        <p class="md-card__subtitle">
+          Puts the previous quantities back. Applied newest first, so an older batch
+          cannot overwrite a newer one.
+        </p>
+      </div>
+    </div>
+    <div class="md-card__body">
+      <form method="post" action="/actions/undo-last" data-confirm-word="UNDO">
+        <div class="md-grid md-grid--3">
+          <div class="md-field" style="margin-bottom:0">
+            <label class="md-field__label" for="undo-count">How many batches</label>
+            <input class="md-input" type="number" id="undo-count" name="count"
+                   value="1" min="1" max="50">
+          </div>
+          <div class="md-field" style="margin-bottom:0">
+            <label class="md-field__label" for="undo-reason">Why (optional)</label>
+            <input class="md-input" type="text" id="undo-reason" name="reason"
+                   placeholder="e.g. vendor sent a bad file">
+          </div>
+          <div class="md-field" style="margin-bottom:0">
+            <label class="md-field__label" for="undo-confirm">Type UNDO to confirm</label>
+            <input class="md-input md-input--mono" type="text" id="undo-confirm" name="confirm"
+                   data-confirm-input autocomplete="off" placeholder="UNDO">
+          </div>
+        </div>
+        <div class="md-row md-row--end mt-2">
+          <button class="md-btn md-btn--danger" type="submit" data-confirm-submit disabled>
+            Undo
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+{% else %}
+  <div class="empty">
+    <div class="empty__icon" aria-hidden="true">↻</div>
+    <div class="empty__title">
+      {% if status_filter %}No runs with that result{% else %}Nothing has run yet{% endif %}
+    </div>
+    <p class="empty__body">
+      {% if status_filter %}
+        <a href="/runs">Show all runs</a>
+      {% else %}
+        Press <strong>Check now</strong> to download the vendor's files and see what the
+        system would do. In practice mode nothing is sent to Amazon, so it costs nothing
+        to try.
+      {% endif %}
+    </p>
+  </div>
+{% endif %}
+
+{% endblock %}

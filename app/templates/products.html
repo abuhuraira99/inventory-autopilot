@@ -1,0 +1,172 @@
+{#
+  The vendor's catalogue and Amazon's, side by side.
+
+  The search box accepts a barcode in ANY form -- with or without leading zeros
+  -- because the vendor writes them one way and Amazon the other, and expecting
+  the operator to know which is which would be a poor joke given that this
+  mismatch is the whole problem the system exists to solve.
+#}
+{% extends "base.html" %}
+
+{% block title %}Products &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Products{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">{{ total|n }} matching the current filter</p>
+{% endblock %}
+
+{% block content %}
+
+<div class="md-card md-card--outlined mb-2">
+  <div class="md-card__body">
+    <form method="get" action="/products" class="md-row md-row--wrap">
+      <div class="md-grow" style="min-width:260px">
+        <input class="md-input md-input--mono" type="search" name="q" value="{{ q }}"
+               placeholder="Barcode, title or artist"
+               aria-label="Search by barcode, title or artist">
+      </div>
+      <button class="md-btn md-btn--filled" type="submit">Search</button>
+      {% if q or only %}
+        <a class="md-btn md-btn--text" href="/products">Clear</a>
+      {% endif %}
+    </form>
+
+    <p class="md-field__help mt-1">
+      A barcode can be typed with or without its leading zeros &mdash; the search tries
+      every form. The vendor sends <span class="mono">8811065126</span>; Amazon holds it
+      as <span class="mono">0008811065126</span>. Both find the same product.
+    </p>
+
+    <div class="md-row md-row--wrap mt-2">
+      <a class="md-chip {{ 'md-chip--selected' if not only }}"
+         href="/products{% if q %}?q={{ q }}{% endif %}">Everything</a>
+      <a class="md-chip {{ 'md-chip--selected' if only == 'in_stock' }}"
+         href="/products?only=in_stock{% if q %}&q={{ q }}{% endif %}">In stock at the vendor</a>
+      <a class="md-chip {{ 'md-chip--selected' if only == 'out_of_stock' }}"
+         href="/products?only=out_of_stock{% if q %}&q={{ q }}{% endif %}">Out of stock</a>
+      <a class="md-chip {{ 'md-chip--selected' if only == 'dropped' }}"
+         href="/products?only=dropped{% if q %}&q={{ q }}{% endif %}">Dropped by the vendor</a>
+    </div>
+  </div>
+</div>
+
+{% if products %}
+  <div class="md-table-wrap">
+    <table class="md-table">
+      <thead>
+        <tr>
+          <th>Barcode</th>
+          <th>Product</th>
+          <th>Type</th>
+          <th class="num">Vendor has</th>
+          <th class="num">Amazon shows</th>
+          <th>Listing</th>
+          <th class="num">Vendor cost</th>
+          <th>Last changed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for product in products %}
+          {% set sku = prefix ~ product.barcode %}
+          {% set listing = listings.get(sku) %}
+          <tr>
+            <td class="mono">
+              {{ product.barcode }}
+              {% if product.raw_barcode and product.raw_barcode != product.barcode %}
+                <div class="md-body-small md-muted" title="Exactly what the vendor sent">
+                  vendor sent {{ product.raw_barcode }}
+                </div>
+              {% endif %}
+              {% if not product.checksum_ok %}
+                <div class="md-body-small" style="color:var(--md-warning)"
+                     title="The barcode's own check digit does not verify. It is still used, but it is worth knowing.">
+                  check digit fails
+                </div>
+              {% endif %}
+            </td>
+            <td>
+              <div class="md-truncate" style="max-width:280px" title="{{ product.title }}">
+                {{ product.title or '(no title)' }}
+              </div>
+              <div class="md-body-small md-muted md-truncate" style="max-width:280px">
+                {{ product.artist }}
+              </div>
+            </td>
+            <td><span class="pill pill--neutral">{{ product.product_format or '?' }}</span></td>
+            <td class="num">
+              {% if product.stock > 0 %}
+                <strong>{{ product.stock|n }}</strong>
+              {% else %}
+                <span class="pill pill--bad">0</span>
+              {% endif %}
+              {% if product.missing_from_full_feeds %}
+                <div class="md-body-small" style="color:var(--md-warning)"
+                     title="Absent from this many consecutive full feeds, which means the vendor has stopped carrying it.">
+                  dropped &times;{{ product.missing_from_full_feeds }}
+                </div>
+              {% endif %}
+            </td>
+            <td class="num">
+              {% if listing and listing.quantity is not none %}
+                {% set target = [product.stock, cfg.max_quantity]|min %}
+                {% if listing.quantity == target %}
+                  <span class="pill pill--good">{{ listing.quantity }}</span>
+                {% else %}
+                  <span class="pill pill--warn" title="Should be {{ target }}">
+                    {{ listing.quantity }}
+                  </span>
+                {% endif %}
+              {% else %}
+                <span class="md-muted">&mdash;</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if listing %}
+                <div class="mono md-body-small md-truncate" style="max-width:200px">{{ listing.seller_sku }}</div>
+                <span class="pill pill--{{ 'good' if listing.status == 'Active' else 'neutral' }}">
+                  {{ listing.status or 'unknown' }}
+                </span>
+              {% else %}
+                <span class="md-muted md-body-small">not listed under {{ prefix }}</span>
+              {% endif %}
+            </td>
+            <td class="num md-muted">{{ product.price|money }}</td>
+            <td class="md-body-small md-muted md-nowrap">{{ product.last_changed_at|ago }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pages > 1 %}
+    <div class="pager">
+      {% if page > 1 %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/products?page={{ page - 1 }}{% if q %}&q={{ q }}{% endif %}{% if only %}&only={{ only }}{% endif %}">Previous</a>
+      {% endif %}
+      <span class="pager__info">Page {{ page }} of {{ pages|n }}</span>
+      {% if page < pages %}
+        <a class="md-btn md-btn--outlined md-btn--small"
+           href="/products?page={{ page + 1 }}{% if q %}&q={{ q }}{% endif %}{% if only %}&only={{ only }}{% endif %}">Next</a>
+      {% endif %}
+    </div>
+  {% endif %}
+
+{% else %}
+  <div class="empty">
+    <div class="empty__icon" aria-hidden="true">▦</div>
+    <div class="empty__title">
+      {% if q %}Nothing found for &ldquo;{{ q }}&rdquo;{% else %}No products yet{% endif %}
+    </div>
+    <p class="empty__body">
+      {% if q %}
+        Try the barcode without its leading zeros, or search by title instead.
+        <br><a href="/products">Clear the search</a>
+      {% else %}
+        Products appear once a vendor feed has been downloaded. Press
+        <strong>Check now</strong> on the status page.
+      {% endif %}
+    </p>
+  </div>
+{% endif %}
+
+{% endblock %}

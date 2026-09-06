@@ -1,0 +1,357 @@
+{#
+  Two-factor enrolment.
+
+  The QR code is drawn client-side into a canvas from the otpauth URI, so no
+  image is generated on the server and no third-party QR service is contacted.
+  That matters: the URI contains the shared secret, and sending it to an
+  external service to be rendered would defeat the point.
+
+  The secret is also shown as text, because some authenticator apps are easier
+  to set up by typing it, and because a QR code that will not scan should never
+  be a dead end.
+#}
+{% extends "base.html" %}
+
+{% block title %}Set up two-factor &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Set up two-factor authentication{% endblock %}
+
+{% block content %}
+
+<div style="max-width:680px">
+
+  <div class="md-banner md-banner--info">
+    <span class="md-banner__icon" aria-hidden="true">🔒</span>
+    <div class="md-banner__body">
+      <div class="md-banner__title">Why this is worth two minutes</div>
+      <p style="margin:6px 0 0">
+        This dashboard can change stock quantities on a live Amazon account. With
+        two-factor on, somebody who learns the password still cannot get in.
+      </p>
+      <p style="margin:6px 0 0">
+        Because this is a shared login, the second factor matters more than usual
+        &mdash; a shared password is the kind that ends up written down.
+      </p>
+    </div>
+  </div>
+
+  <div class="md-card md-card--elevated">
+    <div class="md-card__body">
+
+      <h3>1. Scan this with your authenticator app</h3>
+      <p class="md-body-medium md-muted">
+        Google Authenticator, Authy, 1Password, Microsoft Authenticator &mdash; any of
+        them work.
+      </p>
+
+      <div style="text-align:center;padding:20px 0">
+        <canvas id="qr" width="220" height="220"
+                style="background:#fff;padding:12px;border-radius:var(--md-shape-md)"
+                aria-label="QR code for your authenticator app"></canvas>
+        <noscript>
+          <p class="md-body-small md-muted">
+            The QR code needs JavaScript. Type the code below into your app instead.
+          </p>
+        </noscript>
+      </div>
+
+      <h3>Or type this code in by hand</h3>
+      <p class="mono" style="font-size:17px;letter-spacing:2px;
+              background:var(--md-surface-container);padding:14px 16px;
+              border-radius:var(--md-shape-sm);word-break:break-all">{{ secret }}</p>
+      <p class="md-field__help">
+        Keep a copy somewhere safe until the setup is finished. Once two-factor is on,
+        losing your authenticator app means an administrator has to reset it on the
+        server.
+      </p>
+
+      <hr class="md-divider">
+
+      <h3>2. Enter the current six-digit code</h3>
+      <p class="md-body-medium md-muted">
+        This proves the app is set up correctly. Two-factor is not switched on until a
+        code works &mdash; otherwise enabling it could lock the only account out.
+      </p>
+
+      <form method="post" action="/settings/2fa/confirm" class="md-row md-row--wrap mt-2">
+        <input class="md-input md-input--mono" type="text" name="code" required
+               inputmode="numeric" pattern="[0-9 ]*" maxlength="9"
+               placeholder="000000" autocomplete="one-time-code" autofocus
+               style="max-width:180px;font-size:20px;letter-spacing:4px;text-align:center"
+               aria-label="Six-digit code">
+        <button class="md-btn md-btn--filled" type="submit">Turn on two-factor</button>
+        <a class="md-btn md-btn--text" href="/settings#account">Cancel</a>
+      </form>
+
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ==========================================================================
+   Minimal QR encoder.
+   ==========================================================================
+   Hand-written rather than pulled from a CDN for two reasons: the
+   Content-Security-Policy in app/main.py is `default-src 'self'` and admits no
+   external scripts, and the URI being encoded contains the TOTP shared secret,
+   which must not be handed to a third-party rendering service.
+
+   Implements QR model 2, byte mode, with error correction level L, and picks
+   the smallest version that fits. That is sufficient for an otpauth URI, which
+   is typically 90-130 characters.
+   ========================================================================== */
+(function () {
+  "use strict";
+
+  var URI = {{ uri|tojson }};
+
+  /* --- Galois field arithmetic for Reed-Solomon ------------------------- */
+  var EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+  (function () {
+    var x = 1;
+    for (var i = 0; i < 255; i++) {
+      EXP[i] = x; LOG[x] = i;
+      x <<= 1;
+      if (x & 0x100) x ^= 0x11d;   /* the QR generator polynomial */
+    }
+    for (i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+  })();
+
+  function mul(a, b) { return (a === 0 || b === 0) ? 0 : EXP[LOG[a] + LOG[b]]; }
+
+  function rsGenerator(degree) {
+    var poly = [1];
+    for (var i = 0; i < degree; i++) {
+      var next = new Array(poly.length + 1).fill(0);
+      for (var j = 0; j < poly.length; j++) {
+        next[j] ^= mul(poly[j], 1);
+        next[j + 1] ^= mul(poly[j], EXP[i]);
+      }
+      poly = next;
+    }
+    return poly;
+  }
+
+  function rsEncode(data, eccLen) {
+    var gen = rsGenerator(eccLen);
+    var out = new Array(eccLen).fill(0);
+    for (var i = 0; i < data.length; i++) {
+      var factor = data[i] ^ out[0];
+      out.shift(); out.push(0);
+      for (var j = 0; j < eccLen; j++) out[j] ^= mul(gen[j + 1], factor);
+    }
+    return out;
+  }
+
+  /* --- capacity table, byte mode, EC level L --------------------------- */
+  /* version: [total codewords, ecc per block, block count] */
+  var SPECS = {
+    4:  [80,  20, 1],
+    5:  [108, 26, 1],
+    6:  [136, 18, 2],
+    7:  [156, 20, 2],
+    8:  [194, 24, 2],
+    9:  [232, 30, 2],
+    10: [274, 18, 4]
+  };
+  var DATA_CAPACITY = { 4: 78, 5: 106, 6: 134, 7: 154, 8: 192, 9: 230, 10: 271 };
+
+  function chooseVersion(byteLength) {
+    /* 4 bits mode + 16 bits length for versions >= 10, 8 bits below */
+    for (var v = 4; v <= 10; v++) {
+      var lengthBits = v < 10 ? 8 : 16;
+      var needed = Math.ceil((4 + lengthBits + byteLength * 8) / 8);
+      if (needed <= DATA_CAPACITY[v]) return v;
+    }
+    return null;
+  }
+
+  function buildData(text, version) {
+    var bytes = [];
+    for (var i = 0; i < text.length; i++) {
+      var code = text.charCodeAt(i);
+      if (code < 128) bytes.push(code);
+      else if (code < 2048) bytes.push(192 | (code >> 6), 128 | (code & 63));
+      else bytes.push(224 | (code >> 12), 128 | ((code >> 6) & 63), 128 | (code & 63));
+    }
+
+    var bits = [];
+    function push(value, count) {
+      for (var i = count - 1; i >= 0; i--) bits.push((value >> i) & 1);
+    }
+
+    push(4, 4);                                    /* byte mode */
+    push(bytes.length, version < 10 ? 8 : 16);     /* length */
+    for (var j = 0; j < bytes.length; j++) push(bytes[j], 8);
+
+    var capacity = DATA_CAPACITY[version] * 8;
+    push(0, Math.min(4, capacity - bits.length));  /* terminator */
+    while (bits.length % 8 !== 0) bits.push(0);
+
+    var words = [];
+    for (var k = 0; k < bits.length; k += 8) {
+      var byte = 0;
+      for (var b = 0; b < 8; b++) byte = (byte << 1) | bits[k + b];
+      words.push(byte);
+    }
+    /* pad with the specified alternating bytes */
+    var pad = [0xec, 0x11], p = 0;
+    while (words.length < DATA_CAPACITY[version]) words.push(pad[p++ % 2]);
+    return words;
+  }
+
+  function interleave(words, version) {
+    var spec = SPECS[version];
+    var eccLen = spec[1], blocks = spec[2];
+    var perBlock = Math.floor(words.length / blocks);
+
+    var dataBlocks = [], eccBlocks = [];
+    for (var i = 0; i < blocks; i++) {
+      var block = words.slice(i * perBlock, (i + 1) * perBlock);
+      dataBlocks.push(block);
+      eccBlocks.push(rsEncode(block, eccLen));
+    }
+
+    var out = [];
+    for (var c = 0; c < perBlock; c++) {
+      for (var b = 0; b < blocks; b++) out.push(dataBlocks[b][c]);
+    }
+    for (var e = 0; e < eccLen; e++) {
+      for (var b2 = 0; b2 < blocks; b2++) out.push(eccBlocks[b2][e]);
+    }
+    return out;
+  }
+
+  /* --- module placement ------------------------------------------------ */
+  function render(canvas, text) {
+    var version = chooseVersion(text.length);
+    if (!version) return false;
+
+    var size = version * 4 + 17;
+    var grid = [], reserved = [];
+    for (var i = 0; i < size; i++) {
+      grid.push(new Array(size).fill(0));
+      reserved.push(new Array(size).fill(false));
+    }
+
+    function finder(row, col) {
+      for (var r = -1; r <= 7; r++) {
+        for (var c = -1; c <= 7; c++) {
+          var rr = row + r, cc = col + c;
+          if (rr < 0 || rr >= size || cc < 0 || cc >= size) continue;
+          var edge = (r >= 0 && r <= 6 && (c === 0 || c === 6)) ||
+                     (c >= 0 && c <= 6 && (r === 0 || r === 6));
+          var core = r >= 2 && r <= 4 && c >= 2 && c <= 4;
+          grid[rr][cc] = (edge || core) ? 1 : 0;
+          reserved[rr][cc] = true;
+        }
+      }
+    }
+    finder(0, 0); finder(0, size - 7); finder(size - 7, 0);
+
+    /* timing patterns */
+    for (var t = 8; t < size - 8; t++) {
+      grid[6][t] = grid[t][6] = (t % 2 === 0) ? 1 : 0;
+      reserved[6][t] = reserved[t][6] = true;
+    }
+
+    /* alignment pattern (one, for versions 2..6; simplified placement) */
+    if (version >= 2) {
+      var ac = size - 7;
+      for (var ar = -2; ar <= 2; ar++) {
+        for (var acol = -2; acol <= 2; acol++) {
+          var rr2 = ac + ar, cc2 = ac + acol;
+          if (rr2 < 0 || rr2 >= size || cc2 < 0 || cc2 >= size) continue;
+          if (reserved[rr2][cc2]) continue;
+          grid[rr2][cc2] = (Math.max(Math.abs(ar), Math.abs(acol)) !== 1) ? 1 : 0;
+          reserved[rr2][cc2] = true;
+        }
+      }
+    }
+
+    /* format information area, reserved */
+    for (var f = 0; f < 9; f++) {
+      if (!reserved[8][f]) reserved[8][f] = true;
+      if (!reserved[f][8]) reserved[f][8] = true;
+    }
+    for (var g = 0; g < 8; g++) {
+      reserved[8][size - 1 - g] = true;
+      reserved[size - 1 - g][8] = true;
+    }
+    grid[size - 8][8] = 1; reserved[size - 8][8] = true;   /* dark module */
+
+    /* data, in the standard zig-zag */
+    var words = interleave(buildData(text, version), version);
+    var bitIndex = 0;
+    function nextBit() {
+      var byte = words[bitIndex >> 3];
+      if (byte === undefined) return 0;
+      return (byte >> (7 - (bitIndex++ & 7))) & 1;
+    }
+
+    var upward = true;
+    for (var col = size - 1; col > 0; col -= 2) {
+      if (col === 6) col--;   /* skip the vertical timing column */
+      for (var n = 0; n < size; n++) {
+        var row = upward ? size - 1 - n : n;
+        for (var d = 0; d < 2; d++) {
+          var cur = col - d;
+          if (reserved[row][cur]) continue;
+          var bit = nextBit();
+          /* mask pattern 0: (row + col) % 2 === 0 */
+          if ((row + cur) % 2 === 0) bit ^= 1;
+          grid[row][cur] = bit;
+        }
+      }
+      upward = !upward;
+    }
+
+    /* format bits for EC level L, mask 0 */
+    var FORMAT = 0x77c4;
+    for (var fb = 0; fb <= 5; fb++)  grid[8][fb] = (FORMAT >> fb) & 1;
+    grid[8][7] = (FORMAT >> 6) & 1;
+    grid[8][8] = (FORMAT >> 7) & 1;
+    grid[7][8] = (FORMAT >> 8) & 1;
+    for (var fc = 9; fc <= 14; fc++) grid[14 - fc][8] = (FORMAT >> fc) & 1;
+    for (var fd = 0; fd <= 7; fd++)  grid[size - 1 - fd][8] = (FORMAT >> fd) & 1;
+    for (var fe = 8; fe <= 14; fe++) grid[8][size - 15 + fe] = (FORMAT >> fe) & 1;
+
+    /* draw */
+    var ctx = canvas.getContext("2d");
+    var quiet = 4;
+    var scale = Math.floor(canvas.width / (size + quiet * 2)) || 1;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#000000";
+    for (var r3 = 0; r3 < size; r3++) {
+      for (var c3 = 0; c3 < size; c3++) {
+        if (grid[r3][c3]) {
+          ctx.fillRect((c3 + quiet) * scale, (r3 + quiet) * scale, scale, scale);
+        }
+      }
+    }
+    return true;
+  }
+
+  var canvas = document.getElementById("qr");
+  if (!canvas) return;
+
+  try {
+    if (!render(canvas, URI)) throw new Error("uri too long for the supported versions");
+  } catch (e) {
+    /* A failed QR render must never be a dead end: the secret is printed as
+       text on the page, and every authenticator app accepts manual entry. */
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#555555";
+    ctx.font = "13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Type the code in by hand", canvas.width / 2, canvas.height / 2 - 8);
+    ctx.fillText("(shown below)", canvas.width / 2, canvas.height / 2 + 12);
+  }
+})();
+</script>
+{% endblock %}

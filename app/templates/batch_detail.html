@@ -1,0 +1,231 @@
+{#
+  One batch, with the approve / decline decision.
+
+  Every item is listed with its reason, because approving thousands of changes
+  without being able to see what they are would make the approval step theatre
+  rather than a control.
+#}
+{% extends "base.html" %}
+
+{% block title %}Batch {{ batch.id }} &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Batch {{ batch.id }}{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">
+    From <a href="/runs/{{ batch.run_id }}">run {{ batch.run_id }}</a>
+    &middot; prepared {{ batch.created_at|dt(tz) }}
+    &middot; {{ batch.item_count|n }} product{{ 's' if batch.item_count != 1 }}
+  </p>
+{% endblock %}
+
+{% block appbar_actions %}
+  <span class="pill pill--{{ batch.status|tone }}">{{ batch.status|label }}</span>
+{% endblock %}
+
+{% block content %}
+
+{# ---- the decision ---------------------------------------------------- #}
+{% if batch.status.value == 'awaiting_approval' %}
+  <div class="md-card md-card--elevated mb-3" style="border-left:4px solid var(--md-warning)">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">This is waiting for your decision</h2>
+        <p class="md-card__subtitle">
+          Nothing has been sent to Amazon yet. Approving sends all
+          {{ batch.item_count|n }} changes; declining sends none of them.
+        </p>
+      </div>
+    </div>
+
+    <div class="md-card__body">
+      <div class="md-grid md-grid--4 mb-2">
+        <div class="tile {{ 'tile--bad' if batch.zeroing_count }}">
+          <span class="tile__label">Going off sale</span>
+          <span class="tile__value">{{ batch.zeroing_count|n }}</span>
+          <span class="tile__note">quantity set to 0</span>
+        </div>
+        <div class="tile tile--good">
+          <span class="tile__label">Quantity raised</span>
+          <span class="tile__value">{{ batch.raising_count|n }}</span>
+          <span class="tile__note">recovers sales</span>
+        </div>
+        <div class="tile tile--warn">
+          <span class="tile__label">Quantity reduced</span>
+          <span class="tile__value">{{ batch.lowering_count|n }}</span>
+          <span class="tile__note">lowers exposure</span>
+        </div>
+        <div class="tile">
+          <span class="tile__label">Sent as</span>
+          <span class="tile__value tile__value--sm">
+            {{ 'One batch file' if batch.method.value == 'feeds_api' else 'One at a time' }}
+          </span>
+          <span class="tile__note">
+            {{ 'faster for large batches' if batch.method.value == 'feeds_api' else 'immediate per-product feedback' }}
+          </span>
+        </div>
+      </div>
+
+      <div class="md-banner md-banner--neutral">
+        <span class="md-banner__icon" aria-hidden="true">↺</span>
+        <div class="md-banner__body">
+          <strong>This is reversible.</strong>
+          Every product's current quantity has already been recorded, so one click will
+          put them all back if the result is not what you expected.
+        </div>
+      </div>
+    </div>
+
+    <div class="md-card__actions">
+      <form method="post" action="/batches/{{ batch.id }}/reject" class="md-row">
+        <input class="md-input" style="min-height:40px;max-width:280px" type="text" name="reason"
+               placeholder="Why are you declining? (optional)" aria-label="Reason for declining">
+        <button class="md-btn md-btn--outlined" type="submit">Decline</button>
+      </form>
+      <form method="post" action="/batches/{{ batch.id }}/approve">
+        <button class="md-btn md-btn--success" type="submit"
+                data-confirm="Send {{ batch.item_count }} quantity changes to Amazon now?">
+          Approve and send {{ batch.item_count|n }} changes
+        </button>
+      </form>
+    </div>
+  </div>
+{% endif %}
+
+{% if batch.rejected_reason %}
+  <div class="md-banner md-banner--neutral">
+    <span class="md-banner__icon" aria-hidden="true">✕</span>
+    <div class="md-banner__body">
+      <div class="md-banner__title">This batch was declined</div>
+      <p style="margin:6px 0 0">{{ batch.rejected_reason }}</p>
+      <p style="margin:6px 0 0" class="md-body-small">
+        Nothing was sent. These differences will be proposed again on the next run,
+        because the system compares against what Amazon actually shows rather than
+        against the last feed.
+      </p>
+    </div>
+  </div>
+{% endif %}
+
+{% if batch.notes %}
+  <div class="md-banner md-banner--info">
+    <span class="md-banner__icon" aria-hidden="true">ℹ</span>
+    <div class="md-banner__body">{{ batch.notes }}</div>
+  </div>
+{% endif %}
+
+{# ---- result summary, once sent --------------------------------------- #}
+{% if batch.status.value in ['sent', 'verified', 'partially_failed', 'failed', 'rolled_back'] %}
+  <div class="md-grid md-grid--4 mb-3">
+    <div class="tile tile--good">
+      <span class="tile__label">Accepted by Amazon</span>
+      <span class="tile__value">{{ batch.accepted_count|n }}</span>
+    </div>
+    <div class="tile {{ 'tile--bad' if batch.rejected_count }}">
+      <span class="tile__label">Rejected</span>
+      <span class="tile__value">{{ batch.rejected_count|n }}</span>
+    </div>
+    <div class="tile tile--accent">
+      <span class="tile__label">Read back and confirmed</span>
+      <span class="tile__value">{{ batch.verified_count|n }}</span>
+      <span class="tile__note">
+        {% if batch.verified_count and batch.verified_count < batch.accepted_count %}
+          a sample was checked; the rest is settled by the daily catalogue refresh
+        {% else %}
+          checked on Amazon itself
+        {% endif %}
+      </span>
+    </div>
+    <div class="tile">
+      <span class="tile__label">Sent</span>
+      <span class="tile__value tile__value--sm">{{ batch.sent_at|ago }}</span>
+      <span class="tile__note">
+        {% if batch.approved_by %}approved by {{ batch.approved_by }}{% endif %}
+      </span>
+    </div>
+  </div>
+
+  <div class="md-row md-row--wrap mb-3">
+    {% if batch.rejected_count %}
+      <form method="post" action="/batches/{{ batch.id }}/retry-failed">
+        <button class="md-btn md-btn--outlined md-btn--small" type="submit">
+          Retry the {{ batch.rejected_count|n }} that failed
+        </button>
+      </form>
+    {% endif %}
+    {% if not batch.rolled_back_by_batch_id and batch.status.value != 'rolled_back' %}
+      <a class="md-btn md-btn--danger-outlined md-btn--small" href="/batches/{{ batch.id }}/undo">
+        Undo this batch
+      </a>
+    {% else %}
+      <span class="md-muted md-body-small">
+        Already undone by batch
+        <a href="/batches/{{ batch.rolled_back_by_batch_id }}">{{ batch.rolled_back_by_batch_id }}</a>.
+      </span>
+    {% endif %}
+  </div>
+{% endif %}
+
+{# ---- the items ------------------------------------------------------- #}
+<div class="md-card md-card--outlined">
+  <div class="md-card__header">
+    <div>
+      <h2 class="md-card__title">Every product in this batch</h2>
+      <p class="md-card__subtitle">
+        Showing <span id="shown-count">{{ showing|n }}</span> of {{ item_total|n }},
+        products going off sale first.
+      </p>
+    </div>
+    <input class="md-input" style="max-width:240px;min-height:40px" type="search"
+           placeholder="Filter these rows"
+           data-filter-table="#batch-items" data-filter-count="#shown-count"
+           aria-label="Filter the rows shown">
+  </div>
+  <div class="md-card__body md-card__body--flush">
+    <div class="md-table-wrap" style="border:none;border-radius:0">
+      <table class="md-table md-table--dense" id="batch-items">
+        <thead>
+          <tr>
+            <th>SKU</th><th>Barcode</th><th>Change</th>
+            <th class="num">Vendor had</th><th>Why</th><th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in items %}
+            {% set direction = 'zero' if item.new_quantity == 0
+                  else ('down' if item.previous_quantity is not none and item.new_quantity < item.previous_quantity else 'up') %}
+            <tr>
+              <td class="mono">{{ item.seller_sku }}</td>
+              <td class="mono md-muted">{{ item.barcode or '&mdash;'|safe }}</td>
+              <td>
+                <span class="qty qty--{{ direction }}">
+                  <span class="qty__from">{{ item.previous_quantity if item.previous_quantity is not none else '?' }}</span>
+                  <span class="qty__arrow" aria-hidden="true">&rarr;</span>
+                  <span class="qty__to">{{ item.new_quantity }}</span>
+                </span>
+              </td>
+              <td class="num">{{ item.vendor_stock|n }}</td>
+              <td class="md-body-small md-muted">{{ item.reason }}</td>
+              <td>
+                <span class="pill pill--{{ item.result|tone }}">{{ item.result|label }}</span>
+                {% if item.amazon_code %}
+                  <div class="md-body-small md-truncate" style="max-width:260px;color:var(--md-error)"
+                       title="{{ item.amazon_message }}">{{ item.amazon_code }}</div>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% if item_total > showing %}
+    <div class="md-card__body">
+      <p class="md-body-small md-muted" style="margin:0">
+        Only the first {{ showing|n }} rows are shown, to keep this page fast.
+        The complete list is in the report files on
+        <a href="/runs/{{ batch.run_id }}">run {{ batch.run_id }}</a>.
+      </p>
+    </div>
+  {% endif %}
+</div>
+
+{% endblock %}

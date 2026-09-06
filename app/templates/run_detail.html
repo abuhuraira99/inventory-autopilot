@@ -1,0 +1,361 @@
+{#
+  One run in full.
+
+  This is the page that makes practice mode worth having: it shows exactly what
+  would have been sent, per product, with the reason written in words. The
+  client compares it against what they would have done by hand, and that is how
+  trust gets built before anything is switched on.
+#}
+{% extends "base.html" %}
+
+{% block title %}Run {{ run.id }} &mdash; {{ app_name }}{% endblock %}
+{% block heading %}Run {{ run.id }}{% endblock %}
+{% block subheading %}
+  <p class="appbar__sub">
+    {{ run.started_at|dt(tz) }} &middot; {{ run.trigger.value }}
+    {% if run.triggered_by != 'scheduler' %}by {{ run.triggered_by }}{% endif %}
+    &middot; took {{ run.duration_seconds|duration }}
+  </p>
+{% endblock %}
+
+{% block appbar_actions %}
+  <span class="pill pill--{{ run.status|tone }}">{{ run.status|label }}</span>
+  <a class="md-btn md-btn--text md-btn--small" href="/runs">Back to runs</a>
+{% endblock %}
+
+{% block content %}
+
+{# ---- the outcome, in words ------------------------------------------- #}
+{% if run.guardrail_message %}
+  <div class="md-banner md-banner--{{ run.status|tone }}">
+    <span class="md-banner__icon" aria-hidden="true">
+      {%- if run.status.value == 'halted_by_guardrail' -%}◼
+      {%- elif run.status.value == 'awaiting_approval' -%}✓
+      {%- elif run.status.value == 'dry_run_complete' -%}◑
+      {%- else -%}ℹ{%- endif -%}
+    </span>
+    <div class="md-banner__body">
+      <pre class="explain" style="background:transparent;padding:0;margin:0">{{ run.guardrail_message }}</pre>
+    </div>
+  </div>
+{% endif %}
+
+{% if run.error %}
+  <div class="md-banner md-banner--bad" role="alert">
+    <span class="md-banner__icon" aria-hidden="true">⚠</span>
+    <div class="md-banner__body">
+      <div class="md-banner__title">This run failed</div>
+      <pre class="explain">{{ run.error }}</pre>
+    </div>
+  </div>
+{% endif %}
+
+{# ---- summary --------------------------------------------------------- #}
+<div class="md-grid md-grid--4 mb-3">
+  <div class="tile">
+    <span class="tile__label">Files handled</span>
+    <span class="tile__value">{{ run.files_processed|n }}</span>
+    <span class="tile__note">{{ run.files_skipped|n }} skipped, {{ run.files_discovered|n }} on the server</span>
+  </div>
+  <div class="tile">
+    <span class="tile__label">Rows read</span>
+    <span class="tile__value tile__value--sm">{{ run.rows_read|n }}</span>
+    <span class="tile__note">{{ run.rows_rejected|n }} unreadable</span>
+  </div>
+  <div class="tile {{ 'tile--accent' if run.proposed_changes }}">
+    <span class="tile__label">Changes proposed</span>
+    <span class="tile__value">{{ run.proposed_changes|n }}</span>
+    <span class="tile__note">{{ run.vendor_changes|n }} products moved at the vendor</span>
+  </div>
+  <div class="tile {{ 'tile--good' if run.pushed_changes }}">
+    <span class="tile__label">Sent to Amazon</span>
+    <span class="tile__value">{{ run.pushed_changes|n }}</span>
+    <span class="tile__note">
+      {% if run.mode.value == 'dry_run' %}practice mode &mdash; nothing was sent
+      {% elif run.mode.value == 'needs_approval' %}waiting for approval
+      {% else %}accepted by Amazon{% endif %}
+    </span>
+  </div>
+</div>
+
+{# ---- batches --------------------------------------------------------- #}
+{% if batches %}
+  <div class="md-card md-card--outlined mb-3">
+    <div class="md-card__header"><h2 class="md-card__title">Batches</h2></div>
+    <div class="md-card__body md-card__body--flush">
+      <div class="md-table-wrap" style="border:none;border-radius:0">
+        <table class="md-table md-table--dense">
+          <thead>
+            <tr>
+              <th>Batch</th><th>Status</th><th>How it was sent</th>
+              <th class="num">Items</th><th class="num">Off sale</th>
+              <th class="num">Accepted</th><th class="num">Rejected</th>
+              <th class="num">Confirmed</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for batch in batches %}
+              <tr>
+                <td><a href="/batches/{{ batch.id }}"><strong>{{ batch.id }}</strong></a></td>
+                <td>
+                  <span class="pill pill--{{ batch.status|tone }}">{{ batch.status|label }}</span>
+                  {% if batch.approved_by %}
+                    <div class="md-body-small md-muted">approved by {{ batch.approved_by }}</div>
+                  {% endif %}
+                  {% if batch.rolled_back_by_batch_id %}
+                    <div class="md-body-small md-muted">
+                      undone by batch <a href="/batches/{{ batch.rolled_back_by_batch_id }}">{{ batch.rolled_back_by_batch_id }}</a>
+                    </div>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if batch.method.value == 'feeds_api' %}
+                    One batch file
+                    {% if batch.feed_id %}
+                      <div class="md-body-small md-muted mono">{{ batch.feed_id }}</div>
+                    {% endif %}
+                  {% else %}
+                    One product at a time
+                  {% endif %}
+                </td>
+                <td class="num">{{ batch.item_count|n }}</td>
+                <td class="num">
+                  {% if batch.zeroing_count %}
+                    <span class="pill pill--bad">{{ batch.zeroing_count|n }}</span>
+                  {% else %}&mdash;{% endif %}
+                </td>
+                <td class="num">{{ batch.accepted_count|n }}</td>
+                <td class="num">
+                  {% if batch.rejected_count %}
+                    <span style="color:var(--md-error)"><strong>{{ batch.rejected_count|n }}</strong></span>
+                  {% else %}&mdash;{% endif %}
+                </td>
+                <td class="num">{{ batch.verified_count|n }}</td>
+                <td class="md-right md-nowrap">
+                  {% if batch.status.value == 'awaiting_approval' %}
+                    <a class="md-btn md-btn--tonal md-btn--small" href="/batches/{{ batch.id }}">Review</a>
+                  {% elif batch.status.value in ['sent', 'verified', 'partially_failed'] and not batch.rolled_back_by_batch_id %}
+                    <a class="md-btn md-btn--danger-outlined md-btn--small" href="/batches/{{ batch.id }}/undo">Undo</a>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{# ---- amazon's rejections, grouped ------------------------------------ #}
+{% if error_codes %}
+  <div class="md-card md-card--outlined mb-3" style="border-left:4px solid var(--md-error)">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">What Amazon rejected</h2>
+        <p class="md-card__subtitle">
+          Grouped by Amazon's own code &mdash; a repeated code is one catalogue problem to
+          fix, not many separate ones.
+        </p>
+      </div>
+    </div>
+    <div class="md-card__body md-card__body--flush">
+      <div class="md-table-wrap" style="border:none;border-radius:0">
+        <table class="md-table md-table--dense">
+          <thead><tr><th>Code</th><th class="num">Products</th><th>What Amazon said</th></tr></thead>
+          <tbody>
+            {% for code, count, message in error_codes %}
+              <tr>
+                <td class="mono"><strong>{{ code }}</strong></td>
+                <td class="num">{{ count|n }}</td>
+                <td class="md-body-small">{{ message }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{# ---- the changes, per product ---------------------------------------- #}
+{% if items %}
+  <div class="md-card md-card--outlined mb-3">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">
+          {% if run.mode.value == 'dry_run' %}What this run would have changed
+          {% else %}What this run changed{% endif %}
+        </h2>
+        <p class="md-card__subtitle">
+          Showing <span id="shown-count">{{ items|length }}</span> of {{ item_total|n }}.
+          The reason is written out for every product.
+        </p>
+      </div>
+      <input class="md-input" style="max-width:240px;min-height:40px" type="search"
+             placeholder="Filter these rows"
+             data-filter-table="#items-table" data-filter-count="#shown-count"
+             aria-label="Filter the rows shown">
+    </div>
+
+    <div class="md-card__body" style="padding-bottom:0">
+      <div class="md-row md-row--wrap">
+        <a class="md-chip {{ 'md-chip--selected' if not result_filter }}" href="/runs/{{ run.id }}">All</a>
+        {% for r in results %}
+          <a class="md-chip {{ 'md-chip--selected' if result_filter == r }}"
+             href="/runs/{{ run.id }}?result={{ r }}">{{ r|label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="md-card__body md-card__body--flush">
+      <div class="md-table-wrap" style="border:none;border-radius:0">
+        <table class="md-table md-table--dense" id="items-table">
+          <thead>
+            <tr>
+              <th>SKU</th><th>Change</th><th class="num">Vendor had</th>
+              <th>Why</th><th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in items %}
+              {% set direction = 'zero' if item.new_quantity == 0
+                    else ('down' if item.previous_quantity is not none and item.new_quantity < item.previous_quantity else 'up') %}
+              <tr>
+                <td class="mono">{{ item.seller_sku }}</td>
+                <td>
+                  <span class="qty qty--{{ direction }}">
+                    <span class="qty__from">{{ item.previous_quantity if item.previous_quantity is not none else '?' }}</span>
+                    <span class="qty__arrow" aria-hidden="true">&rarr;</span>
+                    <span class="qty__to">{{ item.new_quantity }}</span>
+                  </span>
+                </td>
+                <td class="num">{{ item.vendor_stock|n }}</td>
+                <td class="md-body-small md-muted">{{ item.reason }}</td>
+                <td>
+                  <span class="pill pill--{{ item.result|tone }}">{{ item.result|label }}</span>
+                  {% if item.amazon_code %}
+                    <div class="md-body-small md-truncate" style="max-width:280px;color:var(--md-error)"
+                         title="{{ item.amazon_message }}">
+                      {{ item.amazon_code }}: {{ item.amazon_message }}
+                    </div>
+                  {% endif %}
+                  {% if item.verified_quantity is not none and item.verified_quantity != item.new_quantity %}
+                    <div class="md-body-small" style="color:var(--md-warning)">
+                      Amazon still shows {{ item.verified_quantity }}
+                    </div>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if pages > 1 %}
+      <div class="md-card__body">
+        <div class="pager">
+          {% if page > 1 %}
+            <a class="md-btn md-btn--outlined md-btn--small"
+               href="/runs/{{ run.id }}?page={{ page - 1 }}{% if result_filter %}&result={{ result_filter }}{% endif %}">Previous</a>
+          {% endif %}
+          <span class="pager__info">Page {{ page }} of {{ pages }}</span>
+          {% if page < pages %}
+            <a class="md-btn md-btn--outlined md-btn--small"
+               href="/runs/{{ run.id }}?page={{ page + 1 }}{% if result_filter %}&result={{ result_filter }}{% endif %}">Next</a>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+  </div>
+{% endif %}
+
+{# ---- reports --------------------------------------------------------- #}
+{% if reports %}
+  <div class="md-card md-card--outlined mb-3">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">Report files from this run</h2>
+        <p class="md-card__subtitle">
+          Excel files with barcodes and SKUs stored as text, so their leading zeros
+          survive. Do not convert them to CSV.
+        </p>
+      </div>
+    </div>
+    <div class="md-card__body">
+      <div class="md-row md-row--wrap">
+        {% for report in reports %}
+          <a class="md-btn md-btn--tonal md-btn--small" href="/reports/{{ report.id }}/download">
+            {{ report_titles.get(report.kind, report.kind) }}
+            <span class="md-muted">({{ report.row_count|n }})</span>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{# ---- the safety checks ----------------------------------------------- #}
+{% if run.guardrail_detail and run.guardrail_detail.checks %}
+  <div class="md-card md-card--outlined mb-3">
+    <div class="md-card__header">
+      <div>
+        <h2 class="md-card__title">Safety checks</h2>
+        <p class="md-card__subtitle">
+          Every check runs, even after one fails, so nothing is hidden behind the first
+          problem.
+        </p>
+      </div>
+    </div>
+    <div class="md-card__body md-card__body--flush">
+      <div class="md-table-wrap" style="border:none;border-radius:0">
+        <table class="md-table md-table--dense">
+          <thead><tr><th>Check</th><th>Result</th><th>What it found</th></tr></thead>
+          <tbody>
+            {% for check in run.guardrail_detail.checks %}
+              <tr>
+                <td class="mono">{{ check.name }}</td>
+                <td>
+                  {% if check.passed %}
+                    <span class="pill pill--good">Passed</span>
+                  {% elif check.severity == 'halt' %}
+                    <span class="pill pill--bad">Stopped the run</span>
+                  {% else %}
+                    <span class="pill pill--warn">Warning</span>
+                  {% endif %}
+                </td>
+                <td class="md-body-small">{{ check.message.split('\n')[0] }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{# ---- the settings in force at the time ------------------------------- #}
+{% if run.settings_snapshot %}
+  <details class="md-card md-card--outlined">
+    <summary class="md-card__header" style="cursor:pointer">
+      <div>
+        <h2 class="md-card__title">The settings that governed this run</h2>
+        <p class="md-card__subtitle">
+          Recorded at the moment it started, so a later settings change cannot rewrite
+          history.
+        </p>
+      </div>
+    </summary>
+    <div class="md-card__body">
+      <dl class="kv">
+        {% for key, value in run.settings_snapshot.items()|sort %}
+          <dt>{{ key }}</dt>
+          <dd class="mono">{{ value }}</dd>
+        {% endfor %}
+      </dl>
+    </div>
+  </details>
+{% endif %}
+
+{% endblock %}
