@@ -1,0 +1,19 @@
+# Normalise line endings so a Windows developer and a Linux server see the same
+# bytes. Without this, a file edited on Windows arrives in the container with
+# CRLF, and a shell script or a Dockerfile with CRLF fails in confusing ways.
+* text=auto eol=lf
+
+# Binary, never touched
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.ico    binary
+*.zip    binary
+*.gz     binary
+*.xlsx   binary
+*.xlsm   binary
+*.woff2  binary
+*.pdf    binary
+
+# Keep documentation out of the diff statistics so a code diff stays readable
+*.md     linguist-documentation

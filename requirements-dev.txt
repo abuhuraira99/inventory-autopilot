@@ -1,0 +1,12 @@
+# Development and test dependencies. Not installed in the production image.
+-r requirements.txt
+
+pytest==8.4.2
+pytest-cov==7.0.0
+# Runs every docstring example in the codebase as a test. The barcode module in
+# particular documents its rules as doctests, so this keeps the documentation
+# and the behaviour from drifting apart.
+pytest-doctestplus==1.5.0
+# In-memory HTTP client for testing FastAPI routes without a live server.
+httpx==0.28.1
+ruff==0.14.0

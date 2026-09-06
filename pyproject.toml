@@ -1,0 +1,75 @@
+[project]
+name = "inventory-autopilot"
+version = "1.0.0"
+description = "Automated vendor-feed to Amazon quantity synchronisation via the Selling Partner API"
+requires-python = ">=3.11"
+
+# =============================================================================
+# pytest
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests", "app"]
+python_files = ["test_*.py"]
+# --doctest-modules runs every example in every docstring. The barcode rules are
+# documented as doctests on purpose, so this stops the documentation and the
+# behaviour from drifting apart.
+addopts = "-q --doctest-modules --strict-markers"
+# ELLIPSIS lets a docstring elide long output with "...".
+# NORMALIZE_WHITESPACE stops line wrapping in a docstring from failing a test.
+# IGNORE_EXCEPTION_DETAIL is opted into per-example where a traceback is shown,
+# because the exception's module path differs between a direct import and a
+# package import.
+doctest_optionflags = ["ELLIPSIS", "NORMALIZE_WHITESPACE"]
+filterwarnings = [
+    "error::DeprecationWarning:app.*",
+]
+markers = [
+    "integration: needs a live database or network (deselect with -m 'not integration')",
+]
+
+# =============================================================================
+# ruff - linting and formatting
+# =============================================================================
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+exclude = [".venv", "migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # import sorting
+    "B",    # bugbear - likely bugs
+    "UP",   # pyupgrade
+    "S",    # bandit - security
+    "C4",   # comprehensions
+    "DTZ",  # naive datetimes: every timestamp in this system must be tz-aware
+    "RET",  # return simplification
+    "SIM",  # simplification
+    "PTH",  # prefer pathlib
+]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # FastAPI's Depends() in defaults is the documented pattern
+    "S101",   # asserts are fine in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use asserts, hardcoded credentials in fixtures, and long lines.
+"tests/*" = ["S101", "S105", "S106", "E501"]
+# The settings module holds long help strings written for end users.
+"app/core/settings_store.py" = ["E501"]
+
+# NOTE: `ruff format` is deliberately NOT used on this codebase, and CI does not
+# run it.
+#
+# Several places are aligned by hand because the alignment carries information:
+# the rate-limit table in app/amazon/client.py, the settings declarations in
+# app/core/settings_store.py, the design-token blocks in the stylesheets, and
+# the barcode-length tables in the docstrings. Black-style reflow collapses all
+# of that into something harder to read and harder to review.
+#
+# `ruff check` IS enforced, so the code is consistently linted; it is just
+# formatted deliberately rather than mechanically. If you disagree, the
+# conversation to have is about the aligned tables, not about the setting.

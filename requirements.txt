@@ -1,0 +1,79 @@
+# =============================================================================
+# Inventory Autopilot - runtime dependencies
+# =============================================================================
+# Every version is pinned exactly. An unpinned dependency means the software
+# that passed testing is not the software that runs in production, which is not
+# acceptable for a system that writes to a live revenue-generating account.
+#
+# To upgrade: change one pin, run the test suite, deploy. Never bulk-upgrade.
+# -----------------------------------------------------------------------------
+
+# --- Web framework -----------------------------------------------------------
+fastapi==0.118.0
+uvicorn[standard]==0.37.0
+# Jinja2 renders the dashboard server-side. No JavaScript build step anywhere in
+# this project: a build step is one more thing that can break a deploy at 3am,
+# and the dashboard is not complex enough to need one.
+jinja2==3.1.6
+# Required by FastAPI to parse HTML form posts (the settings page).
+python-multipart==0.0.20
+# Signs session cookies.
+itsdangerous==2.2.0
+
+# --- Configuration and validation --------------------------------------------
+pydantic==2.12.0
+pydantic-settings==2.11.0
+email-validator==2.3.0
+
+# --- Database ----------------------------------------------------------------
+SQLAlchemy==2.0.44
+# psycopg 3 with the binary wheel, so no compiler is needed in the container.
+psycopg[binary]==3.2.10
+# Schema migrations. Used rather than "create_all" so that upgrading a live
+# deployment is a reviewed, reversible, ordered operation.
+alembic==1.16.5
+
+# --- HTTP client for the Amazon Selling Partner API --------------------------
+# httpx is used for its connection pooling, HTTP/2 support and timeouts that
+# actually fire. The SP-API is called from a background thread pool, so the
+# synchronous client is used deliberately - async would buy nothing here and
+# would complicate the scheduler.
+httpx==0.28.1
+# Retry with exponential backoff and jitter, for Amazon's 429 responses.
+tenacity==9.1.2
+
+# --- Scheduling --------------------------------------------------------------
+# In-process scheduler. Chosen over Celery because this workload is one job at
+# a time on one machine; a broker plus worker plus beat would be three more
+# moving parts for no benefit. Concurrency is prevented by a PostgreSQL
+# advisory lock, not by the scheduler - see app/db.py.
+APScheduler==3.11.0
+
+# --- Security ----------------------------------------------------------------
+# AES-256-GCM for stored secrets.
+cryptography==46.0.2
+# Argon2id password hashing. Preferred over bcrypt: memory-hard, and the
+# current recommendation for new systems.
+argon2-cffi==25.1.0
+# TOTP two-factor codes (Google Authenticator, Authy, 1Password).
+pyotp==2.9.0
+
+# --- File transfer -----------------------------------------------------------
+# FTPS (explicit TLS on port 21) comes from the standard library's ftplib.
+# paramiko is here only so that switching the vendor to SFTP later is a
+# settings change rather than a code change.
+paramiko==4.0.0
+
+# --- Reports -----------------------------------------------------------------
+# XlsxWriter in constant-memory mode. Used INSTEAD of CSV for the five reports
+# because Excel silently strips the leading zeros from barcodes and SKUs when
+# it opens a CSV - which is very likely part of how this account came to have
+# ~12,000 damaged barcodes. Writing real .xlsx with the barcode and SKU columns
+# explicitly typed as text makes that impossible.
+XlsxWriter==3.2.9
+
+# --- Timezones ---------------------------------------------------------------
+# zoneinfo is in the standard library, but Windows and slim Linux images have
+# no system tz database. This provides one so America/New_York resolves
+# everywhere.
+tzdata==2025.2
