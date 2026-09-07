@@ -228,7 +228,7 @@ def test_downgrading_the_baseline_refuses_without_an_explicit_opt_in(monkeypatch
     """
     ``alembic downgrade`` on the initial revision must refuse by default.
 
-    It drops every table, including the undo trail. deploy.sh used to suggest
+    It drops every table, including the undo trail. The deploy script used to suggest
     exactly this command after a failed release.
     """
     monkeypatch.delenv("ALEMBIC_ALLOW_DESTRUCTIVE_DOWNGRADE", raising=False)

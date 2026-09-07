@@ -37,7 +37,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
+# --------------------------------------------------------------------------
+# The scripts live in scripts/ but operate on the repository root, so every
+# path below is resolved from the parent of this file's directory rather than
+# from the directory itself. Getting this wrong is quiet and nasty: setup-env
+# would write scripts/.env, the app would report MASTER_KEY as missing, and the
+# file on screen would look perfectly correct.
+# --------------------------------------------------------------------------
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $RepoRoot
 
 function Write-Step { param([string]$T) Write-Host "`n==> $T" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$T) Write-Host "    ok  $T" -ForegroundColor Green }
@@ -56,7 +64,7 @@ if (-not (Test-Path -LiteralPath 'app\config.py')) {
 
 # Read the database settings out of .env rather than asking for them again.
 $envMap = @{}
-foreach ($line in [System.IO.File]::ReadAllLines((Join-Path $PSScriptRoot '.env'))) {
+foreach ($line in [System.IO.File]::ReadAllLines((Join-Path $RepoRoot '.env'))) {
     $t = $line.Trim()
     if ($t -and -not $t.StartsWith('#') -and $t.Contains('=')) {
         $k, $v = $t.Split('=', 2)

@@ -26,7 +26,14 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")"
+# --------------------------------------------------------------------------
+# The scripts live in scripts/ but operate on the repository root, so every
+# path below is resolved from the parent of this file's directory rather than
+# from the directory itself. Getting this wrong is quiet and nasty: setup-env
+# would write scripts/.env, the app would report MASTER_KEY as missing, and the
+# file on screen would look perfectly correct.
+# --------------------------------------------------------------------------
+cd "$(dirname "$0")/.."
 
 BLUE=$'\033[0;34m'; GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; YELLOW=$'\033[1;33m'; OFF=$'\033[0m'
 step() { echo; echo "${BLUE}==> $*${OFF}"; }

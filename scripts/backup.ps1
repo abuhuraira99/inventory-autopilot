@@ -23,12 +23,20 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
+# --------------------------------------------------------------------------
+# The scripts live in scripts/ but operate on the repository root, so every
+# path below is resolved from the parent of this file's directory rather than
+# from the directory itself. Getting this wrong is quiet and nasty: setup-env
+# would write scripts/.env, the app would report MASTER_KEY as missing, and the
+# file on screen would look perfectly correct.
+# --------------------------------------------------------------------------
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $RepoRoot
 
 # Read the credentials out of .env rather than duplicating them here, so there
 # is exactly one place a password is written down.
-$envPath = Join-Path $PSScriptRoot '.env'
-if (-not (Test-Path -LiteralPath $envPath)) { throw ".env not found in $PSScriptRoot" }
+$envPath = Join-Path $RepoRoot '.env'
+if (-not (Test-Path -LiteralPath $envPath)) { throw ".env not found in $RepoRoot" }
 
 $envMap = @{}
 foreach ($line in [System.IO.File]::ReadAllLines($envPath)) {
@@ -50,7 +58,7 @@ if (-not $pgDump) {
 }
 if (-not $pgDump) { throw "pg_dump not found. Add C:\Program Files\PostgreSQL\<version>\bin to PATH." }
 
-$dir = Join-Path $PSScriptRoot 'data\backups'
+$dir = Join-Path $RepoRoot 'data\backups'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')

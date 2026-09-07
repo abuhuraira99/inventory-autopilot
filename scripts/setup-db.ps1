@@ -31,7 +31,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
+# --------------------------------------------------------------------------
+# The scripts live in scripts/ but operate on the repository root, so every
+# path below is resolved from the parent of this file's directory rather than
+# from the directory itself. Getting this wrong is quiet and nasty: setup-env
+# would write scripts/.env, the app would report MASTER_KEY as missing, and the
+# file on screen would look perfectly correct.
+# --------------------------------------------------------------------------
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $RepoRoot
 
 function Write-Ok   { param([string]$T) Write-Host "  ok  $T" -ForegroundColor Green }
 function Write-Warn { param([string]$T) Write-Host "  !   $T" -ForegroundColor Yellow }
@@ -45,7 +53,7 @@ function Stop-With  {
 # ---------------------------------------------------------------------------
 # Read what setup-env.ps1 generated
 # ---------------------------------------------------------------------------
-$envPath = Join-Path $PSScriptRoot '.env'
+$envPath = Join-Path $RepoRoot '.env'
 if (-not (Test-Path -LiteralPath $envPath)) {
     Stop-With ".env not found. Run .\setup-env.ps1 first."
 }

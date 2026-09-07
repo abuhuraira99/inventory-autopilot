@@ -28,7 +28,7 @@ Pre-deployment audit. Nothing here has run against the live Amazon account yet.
   same value, so pressing Undo shortly after a large run skipped nearly every product
   and reported "already showing 7" for products Amazon was showing as 0. It now ranks
   the evidence per item and errs towards restoring.
-- **`alembic downgrade -1` dropped every table** — and `deploy.sh` instructed operators
+- **`alembic downgrade -1` dropped every table** — and the deploy script instructed operators
   to run it after a failed release. The system's own rollback procedure destroyed the
   record of everything it had ever changed. Now guarded behind an explicit opt-in, and
   the deploy script no longer suggests it.
@@ -93,16 +93,16 @@ critical alert below a configurable threshold.
 
 ### Added
 
-- **Windows Server deployment path** (`setup-env.ps1`, `setup-db.ps1`, `deploy.ps1`,
-  `backup.ps1`, `docs/WINDOWS-DEPLOYMENT.md`), because a real deployment has a Windows
+- **Windows Server deployment path** (four PowerShell scripts in `scripts/`, and
+  Part 2 of `docs/DEPLOYMENT.md`), because a real deployment has a Windows
   VPS that cannot be changed. The application needed no changes; verified serving on
   Windows with the full header set. What is honestly worse there — container isolation,
   RDP exposure, memory — is documented rather than glossed over.
-- `setup-env.sh` / `setup-env.ps1`, so nobody hand-writes a 24-field `.env`. Both refuse
+- `scripts/setup-env.sh` / `scripts/setup-env.ps1`, so nobody hand-writes a 24-field `.env`. Both refuse
   to overwrite an existing one: `MASTER_KEY` is the only thing that can decrypt the
   stored credentials, and a second run would not reset them, it would make them
   permanently unreadable.
-- `setup-db.ps1` creates the PostgreSQL role using the password already in `.env`, so
+- `scripts/setup-db.ps1` creates the PostgreSQL role using the password already in `.env`, so
   the two cannot disagree — then logs in *as* the application role to prove it, because
   creating a role is not evidence that the app can connect.
 - mypy, configured and enforced in CI, clean across all 42 modules.
@@ -135,5 +135,5 @@ Measured against the client's real data on 4 September 2026: 1,158,340 vendor pr
 96,010 Amazon listings of which 45,511 belong to this vendor, **99.5% coverage**, and
 **196 products Amazon was selling with zero vendor stock**.
 
-See [docs/STAGE-0-FINDINGS.md](docs/STAGE-0-FINDINGS.md) for every measurement and how
+See [docs/FINDINGS.md](docs/FINDINGS.md) for every measurement and how
 it was taken.

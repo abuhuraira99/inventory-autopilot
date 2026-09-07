@@ -30,7 +30,15 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
+# --------------------------------------------------------------------------
+# The scripts live in scripts/ but operate on the repository root, so every
+# path below is resolved from the parent of this file's directory rather than
+# from the directory itself. Getting this wrong is quiet and nasty: setup-env
+# would write scripts/.env, the app would report MASTER_KEY as missing, and the
+# file on screen would look perfectly correct.
+# --------------------------------------------------------------------------
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $RepoRoot
 
 function Write-Step { param([string]$Text) Write-Host "`n$Text" -ForegroundColor Cyan }
 function Write-Ok   { param([string]$Text) Write-Host $Text -ForegroundColor Green }
@@ -216,7 +224,7 @@ LOG_JSON=true
 # so "MASTER_KEY" would silently become "﻿MASTER_KEY" and the app would
 # report the key as missing -- with a perfectly correct-looking file on screen.
 [System.IO.File]::WriteAllText(
-    (Join-Path $PSScriptRoot '.env'),
+    (Join-Path $RepoRoot '.env'),
     $content,
     (New-Object System.Text.UTF8Encoding($false))
 )
@@ -228,7 +236,7 @@ LOG_JSON=true
 # grant only SYSTEM and the local Administrators group. Without this the file
 # is readable by every user on the machine, and it contains MASTER_KEY.
 try {
-    $path = Join-Path $PSScriptRoot '.env'
+    $path = Join-Path $RepoRoot '.env'
     $acl = Get-Acl -LiteralPath $path
     $acl.SetAccessRuleProtection($true, $false)   # stop inheriting, drop inherited rules
 

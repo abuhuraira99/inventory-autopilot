@@ -441,7 +441,7 @@ def downgrade() -> None:
     rebuilt from the vendor's files or from Amazon.
 
     An earlier version of this file was guarded only by a docstring, while
-    ``deploy.sh`` told an operator to run ``alembic downgrade -1`` after a
+    ``scripts/deploy.sh`` told an operator to run ``alembic downgrade -1`` after a
     failed release. With a single revision in the tree, following that
     instruction would have dropped the entire database. A warning that has to be
     read at 3am by someone whose deploy has just failed is not a safeguard.
@@ -451,7 +451,7 @@ def downgrade() -> None:
         ALEMBIC_ALLOW_DESTRUCTIVE_DOWNGRADE=I_UNDERSTAND_THIS_DESTROYS_THE_UNDO_TRAIL \
             alembic downgrade base
 
-    In production, restore from a backup instead. ``deploy.sh`` takes one before
+    In production, restore from a backup instead. The deploy script takes one before
     every deployment for exactly this reason.
     """
     if os.environ.get("ALEMBIC_ALLOW_DESTRUCTIVE_DOWNGRADE") != DESTRUCTIVE_OPT_IN:
@@ -464,7 +464,7 @@ def downgrade() -> None:
             "or from Amazon.\n"
             "\n"
             "If a release went wrong, roll the CODE back and restore the database\n"
-            "from the backup deploy.sh took before the deployment. Do not\n"
+            "from the backup the deploy script took before it ran. Do not\n"
             "downgrade this revision.\n"
             "\n"
             "If you really do mean to wipe a development database, set:\n"
