@@ -159,10 +159,26 @@ class TokenProvider:
     lock check keeps it to one.
     """
 
-    def __init__(self, credentials: LwaCredentials) -> None:
+    def __init__(
+        self,
+        credentials: LwaCredentials,
+        *,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self._creds = credentials
         self._token: AccessToken | None = None
         self._lock = threading.Lock()
+
+        #: Injectable purely so the token exchange can be tested. Left as None
+        #: in every non-test caller, which gives httpx's ordinary transport.
+        #:
+        #: This module previously built its ``httpx.Client`` inline with no way
+        #: to substitute one, which made the whole authentication path -- the
+        #: dependency of every Amazon call in the system -- untestable without
+        #: real credentials and a network. That is a design defect, not a
+        #: missing test: the caching behaviour and the operator-facing error
+        #: messages both matter, and neither could be exercised.
+        self._transport = transport
 
     # -- public ------------------------------------------------------------
     def token(self) -> str:
@@ -185,7 +201,28 @@ class TokenProvider:
                     "Cannot authenticate with Amazon.\n\n" + "\n\n".join(f"- {g}" for g in gaps)
                 )
 
-            self._token = self._exchange()
+            try:
+                self._token = self._exchange()
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                # _exchange lets these through so tenacity can retry and back
+                # off; by the time one arrives here every attempt has failed.
+                #
+                # Translated rather than propagated, because a raw
+                # "ConnectError: [Errno -2] Name or service not known" reaching
+                # the dashboard reads like a credential problem, and sends the
+                # operator to re-check credentials that are perfectly correct.
+                # The distinction between "we cannot reach Amazon" and "Amazon
+                # says no" is the first thing they need.
+                raise AmazonAuthError(
+                    "Could not reach Amazon's login service.\n\n"
+                    "This is a network problem, not a credential problem -- nothing "
+                    "is wrong with the Client ID, Client Secret or Refresh Token.\n\n"
+                    "Check that the server has outbound HTTPS access to "
+                    f"{settings.lwa_token_url}. The sync will retry on its next "
+                    "cycle and recover on its own once the connection is back.\n\n"
+                    f"The underlying error was: {type(exc).__name__}: {exc}"
+                ) from exc
+
             log.info(
                 "obtained Amazon access token, valid for %d minutes",
                 self._token.seconds_remaining // 60,
@@ -231,7 +268,7 @@ class TokenProvider:
             "client_secret": self._creds.client_secret,
         }
         try:
-            with httpx.Client(timeout=TOKEN_TIMEOUT) as client:
+            with httpx.Client(timeout=TOKEN_TIMEOUT, transport=self._transport) as client:
                 response = client.post(
                     settings.lwa_token_url,
                     data=payload,
@@ -297,10 +334,19 @@ def _explain_auth_failure(response: httpx.Response) -> str:
     if code == "invalid_client":
         return (
             "Amazon rejected the app credentials (invalid_client).\n\n"
-            "The Client ID or Client Secret is wrong. Both are on the same screen: "
-            "Seller Central -> Apps and Services -> Develop Apps -> your app -> "
-            "LWA credentials -> View. Note that the Client ID and the Application ID "
-            "are different values -- the one we need starts with "
+            "The usual causes, most likely first:\n"
+            "  1. THE CLIENT SECRET HAS PASSED ITS ROTATION DEADLINE. Amazon prints "
+            "an expiry date on the LWA credentials screen, and after it passes the "
+            "secret stops working and returns exactly this error -- which looks like "
+            "a bug in this software rather than an expired credential. If nothing "
+            "about the configuration has changed and this started on its own, check "
+            "that date first. Generate a new secret on the same screen and save it in "
+            "Settings.\n"
+            "  2. The Client ID or Client Secret is wrong or was copied incompletely. "
+            "Both are on the same screen: Seller Central -> Apps and Services -> "
+            "Develop Apps -> your app -> LWA credentials -> View.\n"
+            "  3. The Application ID was entered instead of the Client ID. They are "
+            "different values -- the one we need starts with "
             "'amzn1.application-oa2-client.', not 'amzn1.sp.solution.'\n\n"
             f"Amazon said: {description}"
         )

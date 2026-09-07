@@ -38,7 +38,14 @@ alembic==1.16.5
 # actually fire. The SP-API is called from a background thread pool, so the
 # synchronous client is used deliberately - async would buy nothing here and
 # would complicate the scheduler.
-httpx==0.28.1
+#
+# NOTE THE [http2] EXTRA. It is not optional decoration: SpApiClient passes
+# http2=True, and httpx raises ImportError at construction if the 'h2' package
+# is absent. This pin previously read plain "httpx==0.28.1", which meant every
+# SP-API call path failed at the first line of SpApiClient.__init__ -- the whole
+# Amazon side of the system, dead, in a way no test noticed because no test
+# built a client. tests/test_pusher.py now builds one on every run.
+httpx[http2]==0.28.1
 # Retry with exponential backoff and jitter, for Amazon's 429 responses.
 tenacity==9.1.2
 

@@ -196,6 +196,23 @@ class SpApiPermissionError(SpApiError):
 #: Retried, because they are transient and not our fault.
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
+
+def _http2_available() -> bool:
+    """
+    Whether the optional ``h2`` package is importable.
+
+    Checked once, at import, rather than per client: it cannot change during a
+    process's life, and a failed import is not free.
+    """
+    try:
+        import h2  # noqa: F401  - probing for availability, not using it
+    except ImportError:  # pragma: no cover - depends on the environment
+        return False
+    return True
+
+
+_HTTP2_AVAILABLE = _http2_available()
+
 #: Total attempts, including the first. Each failure backs off exponentially.
 MAX_ATTEMPTS = 5
 
@@ -234,10 +251,24 @@ class SpApiClient:
             timeout=httpx.Timeout(timeout, connect=15.0),
             # Amazon supports HTTP/2 and it reduces overhead when patching many
             # SKUs on one connection.
-            http2=True,
+            #
+            # Negotiated rather than demanded. httpx raises ImportError from this
+            # constructor if http2=True and the 'h2' package is missing, which
+            # would take the entire Amazon integration down at its first line
+            # over an optional performance feature. requirements.txt pins
+            # httpx[http2] so h2 is always present; this check means that if a
+            # future environment somehow lacks it, the system runs a little
+            # slower over HTTP/1.1 and says so, instead of not running at all.
+            http2=_HTTP2_AVAILABLE,
             limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
             headers={"user-agent": "InventoryAutopilot/1.0 (Language=Python)"},
         )
+        if not _HTTP2_AVAILABLE:
+            log.warning(
+                "the 'h2' package is not installed, so Amazon is being called over "
+                "HTTP/1.1. Everything works; large batches are slightly slower. "
+                "Install httpx[http2] to restore it."
+            )
 
         #: Counters for the run summary.
         self.call_count = 0
