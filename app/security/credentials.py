@@ -352,18 +352,37 @@ def _sanity_check(spec: SecretSpec, value: str) -> None:
             )
 
     if spec.key == "lwa_client_secret":
-        if value.startswith("amzn1."):
+        # Amazon issues client secrets in two formats, and BOTH are valid:
+        #
+        #   modern  amzn1.oa2-cs.v1.<64 hex chars>
+        #   legacy  <64 hex chars, no prefix>
+        #
+        # An earlier version of this check rejected anything starting "amzn1."
+        # on the theory that only IDs carry that prefix. That was wrong, and it
+        # would have refused the client's real secret outright -- the credential
+        # could not have been entered at all. Amazon's own LWA credentials
+        # dialog shows the modern secret with the "amzn1.oa2-cs.v1." prefix.
+        # Only the two prefixes below are genuinely IDs rather than secrets.
+        if value.startswith("amzn1.application-oa2-client."):
             raise CredentialError(
-                "That looks like an ID rather than a secret. The Client Secret is a "
-                "long random string with no 'amzn1.' prefix. Values starting with "
-                "'amzn1.application-oa2-client.' are the Client ID, and values "
-                "starting with 'amzn1.sp.solution.' are the Application ID - neither "
-                "is the secret."
+                "That is the Client ID, not the Client Secret. They sit next to each "
+                "other on the LWA credentials screen, so this is an easy mix-up. The "
+                "Client ID goes in the LWA_CLIENT_ID setting; the Secret is the value "
+                "hidden behind the eye icon underneath it, and it starts with "
+                "'amzn1.oa2-cs.'"
+            )
+        if value.startswith("amzn1.sp.solution."):
+            raise CredentialError(
+                "That is the Application ID, not the Client Secret. The Application ID "
+                "identifies the app in Developer Central and is not used by this "
+                "system at all. The Secret is on the same screen under 'LWA "
+                "credentials' and starts with 'amzn1.oa2-cs.'"
             )
         if len(value) < 20:
             raise CredentialError(
                 f"That secret is only {len(value)} characters. Amazon's client secrets "
-                "are much longer. Please check it was copied in full."
+                "are much longer - either 'amzn1.oa2-cs.v1.' followed by 64 characters, "
+                "or 64 characters on their own. Please check it was copied in full."
             )
 
     if ":" in value and value.split(":", 1)[0].lower() in {

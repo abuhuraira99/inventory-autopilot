@@ -358,6 +358,51 @@ def test_client_id_pasted_into_the_secret_field_is_caught(app_client):
     assert "error=" in response.headers["location"]
 
 
+def test_application_id_pasted_into_the_secret_field_is_caught(app_client):
+    """The other ID on the same screen."""
+    response = app_client.post(
+        "/settings/credentials",
+        data={
+            "key": "lwa_client_secret",
+            "value": "amzn1.sp.solution.00000000-0000-0000-0000-000000000000",
+        },
+    )
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+
+
+def test_modern_amzn1_prefixed_client_secret_is_accepted(app_client):
+    """
+    Amazon's CURRENT client secret format must be accepted.
+
+    Modern LWA secrets look like `amzn1.oa2-cs.v1.<64 hex>`. An earlier version
+    of the validation rejected anything starting "amzn1." and would therefore
+    have refused the client's real secret outright -- the credential could not
+    have been entered at all. Regression test for exactly that.
+    """
+    response = app_client.post(
+        "/settings/credentials",
+        data={
+            "key": "lwa_client_secret",
+            "value": "amzn1.oa2-cs.v1." + "a1b2c3d4" * 8,
+        },
+    )
+    assert response.status_code == 303
+    assert "error=" not in response.headers["location"], (
+        "the modern amzn1.oa2-cs. secret format was rejected"
+    )
+
+
+def test_legacy_bare_hex_client_secret_is_accepted(app_client):
+    """Older accounts have a bare 64-character secret with no prefix."""
+    response = app_client.post(
+        "/settings/credentials",
+        data={"key": "lwa_client_secret", "value": "9f8e7d6c" * 8},
+    )
+    assert response.status_code == 303
+    assert "error=" not in response.headers["location"]
+
+
 # ===========================================================================
 # The API
 # ===========================================================================
