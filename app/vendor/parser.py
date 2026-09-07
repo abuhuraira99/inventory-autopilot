@@ -139,6 +139,22 @@ def sha256_of_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
+#: Largest uncompressed member this system will read, in bytes.
+#:
+#: The real full feed is 75 MB compressed and about 190 MB uncompressed
+#: (1,158,340 rows). 4 GB is roughly twenty times the largest file ever
+#: observed, so it will not trip on genuine growth, while still bounding the
+#: work an archive can ask for.
+MAX_UNCOMPRESSED_BYTES = 4 * 1024**3
+
+#: Largest uncompressed:compressed ratio this system will read.
+#:
+#: Text of this kind compresses about 2.5:1. A classic decompression bomb runs
+#: to a million to one. 1,000 sits far above anything real and far below
+#: anything hostile.
+MAX_COMPRESSION_RATIO = 1000
+
+
 def verify_archive(path: Path) -> tuple[str, int]:
     """
     Check the archive opens cleanly and return ``(member_name, member_size)``.
@@ -150,21 +166,28 @@ def verify_archive(path: Path) -> tuple[str, int]:
 
     ``testzip()`` verifies every member's CRC, so a corrupt or partial download
     is rejected here rather than producing plausible-looking garbage later.
+
+    ORDER MATTERS HERE
+    ==================
+    The size and ratio checks below run BEFORE ``testzip()``. ``testzip()``
+    decompresses every member in full to check its CRC, so running it first
+    would mean doing the very unbounded work the size check exists to prevent.
+    The declared sizes come from the archive's central directory and are read
+    without decompressing anything.
+
+    A hostile archive is not the threat model here -- the source is the vendor's
+    own FTP account. The threat is a mistake: a wrong file dropped in the
+    folder, a nested archive, a backup that expands to fill the VPS disk and
+    stops the sync. Bounding it costs two comparisons.
     """
     if not path.exists():
         raise FeedFormatError(f"file does not exist: {path}")
-    if path.stat().st_size == 0:
+    compressed_size = path.stat().st_size
+    if compressed_size == 0:
         raise FeedFormatError(f"file is empty: {path.name}")
 
     try:
         with zipfile.ZipFile(path) as z:
-            broken = z.testzip()
-            if broken is not None:
-                raise FeedFormatError(
-                    f"{path.name} is damaged: the CRC check failed on {broken}. "
-                    "This usually means the download was cut short, or the vendor "
-                    "was still uploading. It will be retried next cycle."
-                )
             members = [i for i in z.infolist() if not i.is_dir()]
             if not members:
                 raise FeedFormatError(f"{path.name} contains no files")
@@ -175,7 +198,31 @@ def verify_archive(path: Path) -> tuple[str, int]:
                 raise FeedFormatError(
                     f"{path.name} contains {len(members)} files ({names}); expected exactly 1"
                 )
-            return members[0].filename, members[0].file_size
+
+            declared = members[0].file_size
+            if declared > MAX_UNCOMPRESSED_BYTES:
+                raise FeedFormatError(
+                    f"{path.name} declares an uncompressed size of "
+                    f"{declared / 1024**3:.1f} GB, above the "
+                    f"{MAX_UNCOMPRESSED_BYTES / 1024**3:.0f} GB limit. Nothing has been "
+                    "read. Either the vendor's feed has grown enormously and the limit "
+                    "needs raising, or this is not a feed file."
+                )
+            if declared / compressed_size > MAX_COMPRESSION_RATIO:
+                raise FeedFormatError(
+                    f"{path.name} expands {declared / compressed_size:,.0f}x, above the "
+                    f"{MAX_COMPRESSION_RATIO:,}x limit. Nothing has been read. Feed text "
+                    "compresses about 2.5x, so this is not a feed file."
+                )
+
+            broken = z.testzip()
+            if broken is not None:
+                raise FeedFormatError(
+                    f"{path.name} is damaged: the CRC check failed on {broken}. "
+                    "This usually means the download was cut short, or the vendor "
+                    "was still uploading. It will be retried next cycle."
+                )
+            return members[0].filename, declared
     except zipfile.BadZipFile as exc:
         raise FeedFormatError(
             f"{path.name} is not a valid zip archive ({exc}). Most likely an "
@@ -228,6 +275,7 @@ def iter_rows(
     column_map: dict[str, str] | None = None,
     strict_header: bool = True,
     encoding: str = "utf-8",
+    member_name: str | None = None,
 ) -> Iterator[tuple[FeedRow | None, RejectedRow | None, ParseStats]]:
     """
     Stream a feed file, yielding ``(row, rejection, stats)`` one line at a time.
@@ -247,6 +295,20 @@ def iter_rows(
     strict_header:
         From the ``guardrail_require_known_header`` setting. When True an
         unfamiliar header raises rather than being parsed on a guess.
+    member_name:
+        The name of the file inside the archive, if the caller has already run
+        :func:`verify_archive` and has it. Omit it and this function verifies
+        the archive itself.
+
+        This exists to avoid decompressing a 75 MB archive twice per run.
+        ``testzip()`` inside :func:`verify_archive` expands every byte to check
+        its CRC; the pipeline verifies each file when it downloads it, and
+        without this parameter the parse would then verify it all over again.
+
+        Note the shape of the option: the only way to skip verification is to
+        supply the value verification returns. There is no boolean that turns a
+        safety check off -- a flag like ``skip_verify=True`` would eventually be
+        passed by someone who had not verified anything.
 
     Notes
     -----
@@ -258,7 +320,8 @@ def iter_rows(
     column_map = column_map or {c: c for c in EXPECTED_HEADER}
     stats = ParseStats()
 
-    member_name, _ = verify_archive(path)
+    if member_name is None:
+        member_name, _ = verify_archive(path)
 
     seen_barcodes: set[str] = set()
 
@@ -412,9 +475,17 @@ def parse_all(
 # Field coercion
 # ---------------------------------------------------------------------------
 
-def _clean(value: str) -> str:
+def _clean(value: str | None) -> str:
     """
     Trim and flatten a text field.
+
+    Note the ``| None`` in the signature. These three coercion helpers all
+    accept None even though ``csv.reader`` yields only strings, because the
+    column indices they are fed come from the client-editable ``column_map``
+    setting: a mapping that names a column the file does not have would
+    otherwise raise mid-parse, 900,000 rows into a feed. The annotation used to
+    say ``str``, which made a type checker report these guards as dead code --
+    the annotation was wrong, not the guard.
 
     Blank fields become ``""`` rather than ``None``: the previous tool hit
     JSON serialisation failures from NaN values leaking into the browser, and
@@ -425,7 +496,7 @@ def _clean(value: str) -> str:
     return " ".join(str(value).split())[:600]
 
 
-def _to_int(value: str) -> int | None:
+def _to_int(value: str | None) -> int | None:
     """
     Parse a stock value. ``None`` means unreadable, which rejects the row.
 
@@ -448,7 +519,7 @@ def _to_int(value: str) -> int | None:
         return int(f)
 
 
-def _to_float(value: str) -> float | None:
+def _to_float(value: str | None) -> float | None:
     """
     Parse a price. Recorded for the reports; never sent to Amazon.
 

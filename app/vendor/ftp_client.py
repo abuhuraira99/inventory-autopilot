@@ -48,6 +48,14 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    # paramiko is imported lazily inside _SftpClient.open so that an install
+    # using FTPS -- which is every install today -- never pays for it. The
+    # annotations below still need the name, and `from __future__ import
+    # annotations` means they are never evaluated at runtime.
+    import paramiko
 
 log = logging.getLogger(__name__)
 
@@ -155,8 +163,22 @@ def connect(creds: VendorCredentials) -> Iterator[VendorClient]:
         client.close()
 
 
-class VendorClient:
-    """Interface both transports implement. Read-only by design."""
+class VendorClient(Protocol):
+    """
+    Interface both transports implement. Read-only by design.
+
+    A Protocol rather than a plain class with ``...`` bodies. As a plain class
+    its methods silently returned None, so a transport that forgot to implement
+    ``list_files`` would report "the vendor's folder is empty" -- which this
+    system would read as "the vendor has withdrawn every product". A Protocol
+    makes that a type error instead, and lets the tests substitute a fake
+    without inheriting anything.
+
+    Note what is absent: there is no delete, no rename, no upload. The vendor's
+    server is treated as read-only at the level of the interface, so no amount
+    of later carelessness can put a destructive call into a code path that runs
+    against it.
+    """
 
     def open(self) -> None: ...
     def close(self) -> None: ...
@@ -182,6 +204,7 @@ class _FtpsClient(VendorClient):
             "connecting to vendor %s:%s as %s (mode=%s)",
             c.host, c.port, c.username, "ftps" if self.use_tls else "ftp-plaintext",
         )
+        ftp: ftplib.FTP
         try:
             if self.use_tls:
                 # Default context: verifies the certificate chain and hostname.
@@ -276,7 +299,7 @@ class _FtpsClient(VendorClient):
 
         try:
             names = ftp.nlst()
-        except ftplib.all_errors as exc:  # type: ignore[misc]
+        except ftplib.all_errors as exc:
             raise VendorConnectionError(f"Could not list the vendor directory: {exc}") from exc
 
         for raw in names:
@@ -381,8 +404,8 @@ class _SftpClient(VendorClient):
 
     def __init__(self, creds: VendorCredentials) -> None:
         self.creds = creds
-        self._transport = None
-        self._sftp = None
+        self._transport: paramiko.Transport | None = None
+        self._sftp: paramiko.SFTPClient | None = None
 
     def open(self) -> None:
         try:
@@ -396,9 +419,19 @@ class _SftpClient(VendorClient):
             transport = paramiko.Transport((c.host, c.port))
             transport.connect(username=c.username, password=c.password)
             self._transport = transport
-            self._sftp = paramiko.SFTPClient.from_transport(transport)
+            sftp = paramiko.SFTPClient.from_transport(transport)
+            if sftp is None:
+                # from_transport returns None rather than raising when the
+                # channel cannot be opened. Without this check the next line
+                # fails with "NoneType has no attribute chdir", which tells an
+                # operator nothing about what to fix.
+                raise VendorConnectionError(
+                    f"Connected to {c.host} over SSH, but the SFTP subsystem could "
+                    "not be opened. The account may not have SFTP enabled."
+                )
+            self._sftp = sftp
             if c.remote_path and c.remote_path not in ("/", ""):
-                self._sftp.chdir(c.remote_path)
+                sftp.chdir(c.remote_path)
         except Exception as exc:
             raise VendorConnectionError(f"SFTP connection to {c.host} failed: {exc}") from exc
 
@@ -469,7 +502,11 @@ def test_connection(creds: VendorCredentials) -> tuple[bool, str, list[RemoteFil
                 "zip files. Check the folder path in Settings.",
                 [],
             )
-        newest = max((f for f in files if f.modified_at), key=lambda f: f.modified_at, default=None)
+        # Narrowed to a list first so the key function cannot be handed a None
+        # timestamp: MLSD is optional and some servers omit it entirely, in
+        # which case max() would raise mid-comparison.
+        timestamped = [(f.modified_at, f) for f in files if f.modified_at is not None]
+        newest = max(timestamped)[1] if timestamped else None
         detail = f" The newest is {newest.name}." if newest else ""
         return True, f"Connected to {creds.host}. Found {len(files)} files.{detail}", files
     except VendorConnectionError as exc:
