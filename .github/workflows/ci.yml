@@ -99,7 +99,11 @@ jobs:
           MASTER_KEY: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=
           SESSION_SECRET: ci-only-session-secret-not-a-real-one
           ENVIRONMENT: test
-          DATABASE_URL: sqlite+pysqlite:///:memory:
+          # QUOTED DELIBERATELY. Unquoted, the trailing colon of ":memory:" makes
+          # this a YAML syntax error, which GitHub reports as a startup failure
+          # with zero jobs run -- so every check silently never executed while the
+          # badge showed red. Do not remove the quotes.
+          DATABASE_URL: "sqlite+pysqlite:///:memory:"
           ENABLE_SCHEDULER: "false"
         # The floor is a ratchet against regression, not a target. It sits just
         # below the current figure deliberately: a gate set at exactly today's
