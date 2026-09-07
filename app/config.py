@@ -228,6 +228,28 @@ class Settings(BaseSettings):
         if self.is_production:
             if self.debug:
                 problems.append("DEBUG must be false in production.")
+            if self.database_url.startswith("sqlite"):
+                # This is not a performance preference. app.db.run_lock is a
+                # PostgreSQL advisory lock, and on SQLite it degrades to a no-op
+                # that always succeeds -- silently, because there is nothing to
+                # fail. That lock is the only thing preventing two overlapping
+                # runs from each reading Amazon's quantity, each computing a
+                # change from the same starting point, and each pushing it.
+                #
+                # A system that appears to work and quietly double-writes to a
+                # live seller account is far worse than one that refuses to
+                # start, so this refuses to start.
+                problems.append(
+                    "DATABASE_URL points at SQLite, which is not usable in production.\n"
+                    "  Two reasons, and the first is a correctness one:\n"
+                    "    1. the exclusive run lock is a PostgreSQL advisory lock. On\n"
+                    "       SQLite it is a no-op, so nothing stops two runs from\n"
+                    "       overlapping and pushing the same change twice.\n"
+                    "    2. a full feed upserts around 1.15 million rows while the\n"
+                    "       dashboard serves reads, and SQLite takes a single writer\n"
+                    "       lock for the duration.\n"
+                    "  Use the PostgreSQL container in docker-compose.yml."
+                )
             if self.vendor_ftp_mode == "ftp" and not self.allow_plaintext_ftp:
                 problems.append(
                     "VENDOR_FTP_MODE=ftp would send the vendor password in clear text. "
