@@ -143,6 +143,63 @@ approval, and every rollback.
 
 ---
 
+## Transactions, and the one rule that governs them
+
+A run has a side effect no database transaction can contain: it changes quantities on
+Amazon. The moment a quantity is patched, that change exists in the world whether or not
+our transaction later commits. Which gives the ordering rule the whole design obeys:
+
+> **The record of what we are about to do must be durable before we do it.**
+
+Concretely, `push_items` — one row per SKU, each carrying `previous_quantity` read from
+Amazon — is written and **committed** before `send_batch` transmits a single byte. The
+barrier is marked in `app/engine/pipeline.py` and explained in `app/db.py:checkpoint`.
+
+### What it looked like when this was wrong
+
+A run used to be a single transaction: ingest, parse, upsert 1.15 million rows, decide,
+create the batch, send to Amazon, verify — committed once at the very end. Two
+consequences, both bad:
+
+| | |
+|---|---|
+| A container killed mid-send | Amazon changed, and the rollback discarded every `previous_quantity`. Those products could not be put back — the one promise this system makes, broken by a `docker compose down` |
+| Transaction length | One transaction spanning a million-row upsert *and* minutes of rate-limited HTTP holds a snapshot open long enough to block autovacuum and bloat the tables |
+
+### The checkpoints
+
+```
+run opened ──▶ vendor data stored ──▶ reports written ──▶ batch recorded
+                                                              │
+                                              ═══ DURABILITY BARRIER ═══
+                                                              │
+                                                    send ──▶ verify
+```
+
+Committing mid-run means a later failure does **not** roll back earlier stages. That is
+intended, not a compromise. Partial progress with an accurate record beats atomicity that
+cannot include Amazon anyway, and every stage is written to be idempotent and to
+re-derive its state from Amazon on the next run.
+
+The vendor checkpoint earns its place too: `feed_files.content_sha256` is what stops a
+file being processed twice. Uncommitted, a later failure would roll that record back and
+the same archive would be downloaded and reprocessed on every subsequent cycle.
+
+### Recovery
+
+Because `SENDING` is committed before the first call, an interrupted send is *visible*
+rather than invisible — which then obliges something to act on it. `_recover_interrupted_batches`
+runs at the start of every run, before any new work.
+
+It can assume any batch still marked `SENDING` is abandoned, with no age heuristic: the
+advisory run lock guarantees at most one run at a time, so there is no other run it could
+belong to. Accepted items are verified against Amazon; items still `PENDING` were never
+sent and are marked `SKIPPED` rather than blindly resent, because this run's own decision
+pass will propose them again if Amazon still disagrees with the vendor — and doing it
+there keeps them inside the guardrails and the change limit.
+
+---
+
 ## Full feeds and delta feeds are not interchangeable
 
 This is the distinction most likely to be broken by a well-meaning refactor.
@@ -321,15 +378,37 @@ column name and turns `seller-sku` into `﻿seller-sku` — silently breaking a 
 
 ## Testing
 
-184 tests. **No network, no live database.** A test that could reach Amazon is a test
-that could change a live listing, and that must not exist in a CI pipeline. Anything
-needing a live service is `@pytest.mark.integration` and excluded by default.
+255 tests, 68% coverage, mypy clean. **No network, no live database.** A test that could
+reach Amazon is a test that could change a live listing, and that must not exist in a CI
+pipeline. Anything needing a live service is `@pytest.mark.integration` and excluded by
+default.
+
+Amazon is faked at the HTTP transport (`httpx.MockTransport`) underneath a real
+`SpApiClient`, never at the client level. That choice matters: it keeps the rate limiter,
+the retry and backoff logic, the 401 token refresh, the error extraction and — above all
+— the price guard inside `SpApiClient.request` on the tested path. Faking one level higher
+would silently exclude the check the client exists to perform.
 
 | File | What it protects |
 |---|---|
 | `test_barcode.py` | the padding rule, with real vendor/Amazon barcode pairs |
 | `test_engine.py` | quantity rules, scope filter, guardrails, the price invariant |
+| `test_pusher.py` | the write path: the durability barrier, per-SKU failure isolation, "ACCEPTED but not applied", undo, recovery after a kill mid-send |
+| `test_pipeline_end_to_end.py` | a whole run with both edges faked; pause, guardrail halt, approval, idempotence, dedupe |
+| `test_migrations.py` | `migrations/` and `app/models.py` cannot drift apart |
+| `test_parser_safety.py` | truncated downloads, CRC failures, expansion bounds, header changes |
+| `test_lwa.py` | token caching, the double-checked lock, and the operator-facing auth messages |
+| `test_config_guards.py` | the configurations production must refuse to start with |
 | `test_web.py` | every page renders; nothing is public; **no secret ever reaches a browser** |
+
+### The one deliberate gap
+
+`vendor/ftp_client.py` sits at 23%. Exercising FTPS meaningfully needs a real server —
+a mock that returns whatever the test wants proves only that the mock works, and the
+failures that matter here (TLS session reuse across the data channel, passive mode
+through NAT, MLSD missing on some servers) are exactly the ones a mock cannot produce.
+It is covered by the connection test on the Settings page and by the deployment
+checklist in `OPERATIONS.md` instead. Stated rather than hidden behind an average.
 | doctests in `app/` | the documented examples are executed, so docs cannot drift |
 
 `tests/conftest.py` holds real production data as fixtures — actual feed rows, actual

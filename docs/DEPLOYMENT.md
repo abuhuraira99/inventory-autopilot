@@ -347,8 +347,16 @@ git checkout <previous-commit>
 docker compose up -d --build
 ```
 
-If the release included a migration, `alembic downgrade -1` first — and read what it
-does before running it.
+**Do not run `alembic downgrade`.** Most releases add no migration, and a newer schema
+is harmless to older code here — added columns are nullable or defaulted. Downgrading the
+*first* revision drops every table, including `push_items`, which is the undo trail and
+the one thing in this database that cannot be rebuilt from the vendor's files or from
+Amazon. That command is guarded and will refuse unless an explicit opt-in environment
+variable is set.
+
+If a release genuinely needs its schema change undone, restore the backup `deploy.sh`
+takes before every deployment: it was taken before the migration ran, so it is by
+definition the schema the old code expects.
 
 ---
 

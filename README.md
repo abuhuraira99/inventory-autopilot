@@ -145,6 +145,24 @@ careless click from being switched off.
 **Undo:** every push records the previous quantity of every SKU, taken from Amazon
 itself. One click puts them back. See [`app/engine/rollback.py`](app/engine/rollback.py).
 
+Two properties make that promise real rather than nominal, and both were mistakes worth
+naming:
+
+- **The record is committed before the send begins.** A run used to be one long
+  transaction committed at the end, so a container killed mid-send left Amazon changed
+  with no record of what it had been. There is now an explicit durability barrier in
+  [`app/engine/pipeline.py`](app/engine/pipeline.py) — see
+  [`app/db.py:checkpoint`](app/db.py) for the reasoning. A batch interrupted mid-flight
+  survives as `SENDING`, and the next run settles it against Amazon.
+- **Undo trusts what was sent, not the daily catalogue cache.** `amazon_listings.quantity`
+  is refreshed once a day plus whatever verification samples — 100 items out of 5,000. The
+  first version of the undo planner compared that cache against the value it would restore
+  and skipped the item when they matched, which meant that pressing Undo shortly after a
+  large run skipped nearly every product and reported "already showing 7" for products
+  Amazon was showing as 0. It now uses the strongest evidence available per item, and
+  errs towards restoring: writing a quantity Amazon already holds is a no-op, while
+  failing to restore one leaves stock on sale that does not exist.
+
 **Honest caveat:** Amazon's sandbox returns canned data and knows nothing about the real
 listings, so there is no way to fully rehearse without touching the live account. The
 plan is to make the first touch small and reversible — a whitelist of 25–50 slow-moving
@@ -204,20 +222,40 @@ python scripts/stage0_coverage.py \
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-pytest                    # 184 tests, no network, no live database
+pytest                    # 255 tests, no network, no live database
 ruff check .
+mypy                      # configured in pyproject.toml; passes clean
 ```
 
-**184 tests.** The suite never touches the network or a real database — a test that
-could reach Amazon is a test that could change a live listing. Anything needing a live
-service is marked `@pytest.mark.integration` and excluded by default.
+**255 tests, 68% coverage, and mypy clean.** The suite never touches the network or a
+real database — a test that could reach Amazon is a test that could change a live
+listing. Amazon is faked at the HTTP transport with `httpx.MockTransport` underneath a
+real `SpApiClient`, so the rate limiter, the retry logic, the token refresh and the
+price guard all run for real. Anything needing a live service is marked
+`@pytest.mark.integration` and excluded by default.
+
+Coverage is uneven on purpose. What matters is *where* it is:
+
+| | |
+|---|---|
+| `engine/decision.py` · `core/barcode.py` | 98% · 97% |
+| `engine/guardrails.py` · `engine/mapping.py` · `amazon/guard.py` | 95% · 94% · 94% |
+| `amazon/listings.py` · `engine/report_builder.py` | 86% · 86% |
+| `engine/pipeline.py` · `amazon/client.py` · `vendor/parser.py` | 74% · 73% · 74% |
+| `engine/pusher.py` · `engine/rollback.py` | 69% · 69% |
+| `vendor/ftp_client.py` | 23% — needs a real server; see docs/OPERATIONS.md |
 
 The highest-value tests, if you only read a few:
 
 - [`tests/test_barcode.py`](tests/test_barcode.py) — the padding rule, with the real
   vendor/Amazon barcode pairs
-- [`tests/test_engine.py`](tests/test_engine.py) — the decision rules, the scope filter,
-  the guardrails, and the price invariant
+- [`tests/test_pusher.py`](tests/test_pusher.py) — the write path: the durability
+  barrier, per-SKU failure isolation, "Amazon said ACCEPTED and did nothing", undo, and
+  recovery from a run killed mid-send
+- [`tests/test_pipeline_end_to_end.py`](tests/test_pipeline_end_to_end.py) — a whole run
+  with the vendor and Amazon faked at their edges, including idempotence
+- [`tests/test_migrations.py`](tests/test_migrations.py) — the schema in `migrations/`
+  and the schema in `app/models.py` cannot drift apart
 - [`tests/test_web.py`](tests/test_web.py) — every page renders, nothing is public, and
   **no stored secret is ever rendered to a browser**
 
@@ -268,9 +306,9 @@ app/
   templates/, static/    Material Design 3, no build step
 
 docs/                    architecture, deployment, security, operations
-migrations/              Alembic
+migrations/              Alembic, with a frozen explicit-DDL baseline
 scripts/stage0_coverage.py   measure the catalogue offline
-tests/                   184 tests
+tests/                   255 tests
 ```
 
 ---
@@ -282,7 +320,7 @@ tests/                   184 tests
 | Vendor side (fetch, parse, store, reports) | ✅ built and validated against real feeds |
 | Amazon read (catalogue, mapping, coverage) | ✅ built and validated against the real report |
 | Amazon write (quantity patch, bulk feed) | ✅ built — **needs the app's `Product Listing` role** |
-| Dashboard, settings, audit, undo | ✅ built, 184 tests |
+| Dashboard, settings, audit, undo | ✅ built, 255 tests, mypy clean |
 
 **Both original blockers are now cleared** (confirmed 7 September 2026):
 
