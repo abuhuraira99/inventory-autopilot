@@ -284,16 +284,22 @@ tests/                   184 tests
 | Amazon write (quantity patch, bulk feed) | ✅ built — **needs the app's `Product Listing` role** |
 | Dashboard, settings, audit, undo | ✅ built, 184 tests |
 
-**Two things are outstanding before the first real push:**
+**Both original blockers are now cleared** (confirmed 7 September 2026):
 
-1. **The Amazon app is missing the `Product Listing` role.** As inspected on
-   5 September 2026 it had `Pricing` and `Inventory and Order Tracking` ticked, but not
-   `Product Listing` — which is the role that permits a quantity change. `Pricing`
-   should also be *removed*: this system must never change a price.
-   Fix: [docs/AMAZON-APP-SETUP.md](docs/AMAZON-APP-SETUP.md).
-2. **The LWA Client Secret has not been supplied.** It is the one credential missing,
-   and nothing can talk to Amazon without it. Same Seller Central screen as the Client
-   ID.
+1. ✅ **The `Product Listing` role is ticked.** This is the role that permits a quantity
+   change; without it every push returns 403. A new refresh token was issued *after* the
+   role change, which is the correct order — changing roles invalidates the old token.
+2. ✅ **The LWA Client Secret has been supplied.**
+
+**One thing to diarise:** Amazon prints a **rotation deadline of 12 February 2027** on
+the LWA credentials screen. After that date the secret stops working and Amazon returns
+`invalid_client`, which looks exactly like a bug. It is the only hard expiry in the
+system.
+
+**One optional tidy-up:** the `Pricing` role is still ticked. Not blocking — the
+software refuses to transmit a price at the transport layer regardless — but removing it
+means Amazon *also* refuses, which is a second independent lock on the promise the
+client cares most about.
 
 ---
 

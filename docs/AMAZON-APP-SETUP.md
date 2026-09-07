@@ -5,27 +5,48 @@ never done it before. About 15 minutes.
 
 ---
 
-## Why this matters right now
+## ✅ Status: the main fix is done
 
-Amazon controls what an application is allowed to do through **roles**. The app for this
-account already exists, but when it was inspected on 5 September 2026 it was missing the
-one role that actually matters for this project.
+**Updated 7 September 2026.** `Product Listing` has been ticked and a fresh refresh
+token issued. The system can now write quantities.
 
-| Role | State then | Should be |
-|---|---|---|
-| Pricing | ☑ ticked | ☐ **remove it** |
-| Inventory and Order Tracking | ☑ ticked | ☑ keep |
-| Brand Analytics | ☐ | ☐ |
-| **Product Listing** | ☐ **not ticked** | ☑ **tick it** |
+| Role | 5 Sep | 7 Sep | Wanted |
+|---|---|---|---|
+| **Product Listing** | ☐ | ☑ **fixed** | ☑ |
+| Inventory and Order Tracking | ☑ | ☑ | ☑ |
+| Pricing | ☑ | ☑ | ☐ *still worth removing* |
+| Brand Analytics | ☐ | ☑ | ☐ *harmless* |
+| PII / customer data | ☐ | ☐ | ☐ ✅ |
 
 **`Product Listing` is the role that permits a quantity to be changed.** Without it
 every update is refused — and a read-only role looks almost identical in the console, so
-this only shows up at the very first attempt to push. Ten minutes now; a very unwelcome
-surprise in week four.
+it only shows up at the very first attempt to push.
 
-**`Pricing` should be removed.** This system must never change a price, and the cleanest
-guarantee is for Amazon itself to refuse. The software also refuses independently, but
-two locks are better than one.
+### Still worth doing, when convenient
+
+**Untick `Pricing`.** Not blocking: the software refuses to transmit anything
+price-shaped at the transport layer, whatever Amazon allows. But with the role removed,
+Amazon *also* refuses — two independent locks on the one promise the client cares most
+about.
+
+⚠️ If you do change the roles, the refresh token is invalidated again. Click
+**Authorize → Authorize app** afterwards and paste the new token into the dashboard.
+
+### ⏰ Diarise this
+
+The LWA credentials screen shows a **rotation deadline of 12 February 2027, 20:14 UTC**
+for the Client Secret. After that date it stops working and Amazon returns
+`invalid_client`, which looks exactly like a bug. Set a reminder for late January 2027:
+click **Rotate secret**, then update it in the dashboard.
+
+It is the only hard expiry date in the whole system.
+
+---
+
+## The rest of this document
+
+Kept as the reference for how the roles were checked and fixed, and for the next time a
+token or secret needs regenerating.
 
 ---
 
@@ -155,8 +176,12 @@ You will end up with:
 | **Refresh Token** | Authorize → Authorize app | `Atzr\|IwEBI…` about 400 characters |
 | **Seller ID** | Settings → Account Info → Merchant Token | `A1EXAMPLESELLER` |
 
-Of these, **the Client Secret is the one that has not been supplied**, and nothing can
-talk to Amazon without it.
+All four have now been supplied (7 September 2026).
+
+Note the Client Secret's format: modern Amazon secrets look like
+`amzn1.oa2-cs.v1.<64 characters>`. Older accounts have a bare 64-character string with
+no prefix. **Both are valid** — the dashboard accepts either, and rejects only the two
+values that are genuinely IDs rather than secrets.
 
 ### 🔐 Do not send these through WhatsApp, email, chat, SMS or a screenshot
 

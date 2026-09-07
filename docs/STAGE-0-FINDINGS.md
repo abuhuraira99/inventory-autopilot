@@ -335,7 +335,11 @@ the parser is never allowed to choke on them.
 
 ---
 
-## 9 · The Amazon app is missing a permission
+## 9 · The Amazon app was missing a permission — now fixed
+
+**Resolved 7 September 2026:** `Product Listing` was ticked and a new refresh token
+issued. The Client Secret was also supplied. Both blockers are cleared; this section is
+kept as the record of what was found and why it mattered.
 
 From the screenshot of Developer Central supplied on 5 September 2026:
 

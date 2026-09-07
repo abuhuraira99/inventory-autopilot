@@ -15,7 +15,7 @@ Roughly 30 minutes end to end.
 | Docker and Docker Compose | Installed in step 1 |
 | The vendor's FTP username | from the vendor's credentials sheet |
 | The Amazon Client ID and Seller ID | Not secret; they go in `.env` |
-| **The Amazon Client Secret** | ⚠️ Not yet supplied. See [AMAZON-APP-SETUP.md](AMAZON-APP-SETUP.md). |
+| The Amazon Client Secret and refresh token | ✅ Supplied 7 Sep 2026. Typed into the dashboard in step 8, not into `.env`. |
 
 You do **not** need: an AWS account, an IAM user, a role to assume, or any request
 signing. Amazon removed that requirement from SP-API.
@@ -308,6 +308,25 @@ whether the service is up and nothing about the account or the data.
 ---
 
 ## Updating
+
+**Pushing to GitHub does NOT change the server.** Git is a pull system: nothing reaches
+the VPS until somebody tells it to fetch. That is deliberate — an automatic deploy on a
+system that writes to a live Amazon account means a bad commit reaches production with
+nobody in between.
+
+Use the script in the repository:
+
+```bash
+cd /opt/inventory-autopilot
+./deploy.sh
+```
+
+It backs up the database FIRST, pulls, rebuilds, applies migrations, restarts, and waits
+for the health check. If the health check fails it prints the exact commands to roll
+back. It also refuses to run if there are uncommitted changes on the server, rather than
+overwriting them.
+
+By hand, if you prefer:
 
 ```bash
 cd /opt/inventory-autopilot
