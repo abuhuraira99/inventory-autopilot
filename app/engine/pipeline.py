@@ -34,8 +34,9 @@ THREE RULES THIS FILE ENFORCES
 from __future__ import annotations
 
 import logging
+import shutil
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -395,8 +396,169 @@ def execute_run(
         _notify(session, run, "push_failure", "critical",
                 "Inventory sync failed unexpectedly", run.error, cfg)
 
+    finally:
+        # In a `finally` so it runs on EVERY path out of the block above,
+        # including the early returns.
+        #
+        # The obvious placement -- after the try/except -- would have skipped
+        # the paths that return early, and one of those is NO_CHANGES: the
+        # normal steady-state outcome, and therefore most runs. Tidying that
+        # only happens on the unusual days is not tidying.
+        #
+        # It also runs after a failure, which is intended: a run that failed
+        # because the disk was full is precisely the run that most needs old
+        # files cleared and the operator warned.
+        #
+        # Wrapped, because housekeeping must never be the reason a run is
+        # reported as failed. Deleting an old file is not worth an incident.
+        try:
+            _housekeeping(session, run, cfg, outcome)
+        except Exception:  # pragma: no cover - never let tidying break a run
+            log.exception("housekeeping failed; the run itself is unaffected")
+
     _finish(run)
     return outcome
+
+
+# ===========================================================================
+# Housekeeping
+# ===========================================================================
+
+def _housekeeping(session: Session, run: Run, cfg: dict, outcome: RunOutcome) -> None:
+    """
+    Delete files that are no longer needed, and warn before the disk fills.
+
+    WHY THIS EXISTS
+    ===============
+    Three things grew without limit, and the failure they produce is the quiet
+    kind: the disk fills, the next download fails, nothing can be written, and
+    Amazon carries on showing whatever it last showed. Nobody is told, because
+    telling somebody also requires writing something down.
+
+      * **Vendor archives.** A processed feed was never deleted. The daily full
+        feed is 75 MB, so this alone consumed about 2.2 GB a month, forever.
+
+      * **Report files.** ``report_retention_days`` existed, appeared on the
+        Settings page, and its own help text said "older report files are
+        deleted to stop the disk filling up" -- and no code ever read it. A
+        setting that promises something and does nothing is worse than no
+        setting, because it stops anyone from looking.
+
+      * **Catalogue snapshots.** Each refresh saves Amazon's own listing report,
+        about 5 MB, daily.
+
+    WHAT IS DELIBERATELY NEVER DELETED
+    ==================================
+    Quarantined feed files, however old. A rejected archive is precisely the one
+    a human needs to open to find out what the vendor changed, and it is also
+    the rarest. Deleting the evidence of a problem to save 75 MB is a poor trade.
+
+    Database rows are also kept in every case. Only the files go. ``feed_files``
+    still holds the content hash that stops a file being processed twice, and
+    ``report_files`` still records that a report existed and what was in it.
+    """
+    data_dir = app_settings.data_dir
+    now = utcnow()
+
+    # ---- vendor archives -------------------------------------------------
+    keep_feeds = int(cfg.get("keep_feed_files_days", 3))
+    cutoff = now - timedelta(days=keep_feeds)
+    stale = session.execute(
+        select(FeedFile).where(
+            FeedFile.local_path.is_not(None),
+            FeedFile.status != FileStatus.QUARANTINED,
+            FeedFile.processed_at.is_not(None),
+            FeedFile.processed_at < cutoff,
+        )
+    ).scalars()
+
+    removed_feeds = freed = 0
+    for record in stale:
+        path = Path(record.local_path or "")
+        try:
+            if path.exists():
+                freed += path.stat().st_size
+                path.unlink()
+                removed_feeds += 1
+        except OSError as exc:  # pragma: no cover - permissions, a locked file
+            log.warning("could not delete %s: %s", path, exc)
+            continue
+        # Cleared either way: the file is gone, or it was already gone.
+        record.local_path = None
+
+    # ---- report files ----------------------------------------------------
+    keep_reports = int(cfg.get("report_retention_days", 90))
+    cutoff = now - timedelta(days=keep_reports)
+    old_reports = session.execute(
+        select(ReportFile).where(ReportFile.created_at < cutoff)
+    ).scalars()
+
+    removed_reports = 0
+    for report in old_reports:
+        path = Path(report.path or "")
+        try:
+            if path.exists():
+                freed += path.stat().st_size
+                path.unlink()
+                removed_reports += 1
+        except OSError as exc:  # pragma: no cover
+            log.warning("could not delete %s: %s", path, exc)
+
+    # ---- catalogue snapshots ---------------------------------------------
+    # Keyed on the file's own age rather than a database row, because these are
+    # written by the Amazon layer as a side effect of a refresh and the run
+    # record does not own them.
+    keep_snapshots = int(cfg.get("keep_catalog_snapshots_days", 30))
+    snapshot_cutoff = now - timedelta(days=keep_snapshots)
+    removed_snapshots = 0
+    snapshot_dir = data_dir / "snapshots"
+    if snapshot_dir.is_dir():
+        for path in snapshot_dir.iterdir():
+            if not path.is_file():
+                continue
+            try:
+                mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+                if mtime < snapshot_cutoff:
+                    freed += path.stat().st_size
+                    path.unlink()
+                    removed_snapshots += 1
+            except OSError as exc:  # pragma: no cover
+                log.warning("could not delete %s: %s", path, exc)
+
+    if removed_feeds or removed_reports or removed_snapshots:
+        log.info(
+            "housekeeping: removed %d feed archive(s), %d report(s), %d snapshot(s), "
+            "freeing %.1f MB",
+            removed_feeds, removed_reports, removed_snapshots, freed / 1024**2,
+        )
+
+    # ---- the warning that matters ----------------------------------------
+    threshold_gb = float(cfg.get("min_free_disk_gb", 2.0))
+    if threshold_gb <= 0:
+        return
+    try:
+        free_gb = shutil.disk_usage(data_dir).free / 1024**3
+    except OSError:  # pragma: no cover - the directory always exists by now
+        return
+
+    if free_gb < threshold_gb:
+        message = (
+            f"Only {free_gb:.1f} GB of disk space is left on the server, below the "
+            f"{threshold_gb:.1f} GB warning level.\n\n"
+            "This matters more than it sounds. When the disk is full the vendor's file "
+            "cannot be downloaded, nothing can be written, and the sync stops without "
+            "being able to tell anyone -- Amazon simply keeps showing whatever it last "
+            "showed.\n\n"
+            "What to do, easiest first:\n"
+            "  1. Lower 'Keep report files for ... days' in Settings.\n"
+            "  2. Lower 'Keep downloaded vendor files for ... days' in Settings.\n"
+            "  3. Reduce how many nightly database backups are kept.\n"
+            "  4. Ask the VPS provider to expand the disk."
+        )
+        log.error("low disk space: %.1f GB free", free_gb)
+        outcome.errors.append(f"low disk space: {free_gb:.1f} GB free")
+        _notify(session, run, "low_disk", "critical",
+                f"Only {free_gb:.1f} GB of disk space left", message, cfg)
 
 
 # ===========================================================================

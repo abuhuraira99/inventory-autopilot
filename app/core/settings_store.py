@@ -530,6 +530,53 @@ SPECS: list[Spec] = [
         category="reports",
         sort_order=61,
     ),
+    Spec(
+        key="keep_feed_files_days",
+        default=3,
+        value_type="int",
+        min_value=0,
+        max_value=365,
+        label="Keep downloaded vendor files for … days",
+        help_text=(
+            "The daily full feed is about 75 MB and a copy is kept after it is read, in "
+            "case somebody needs to look at the original. Once the rows are in the "
+            "database the file itself is not needed, so old ones are deleted. Files that "
+            "were rejected are always kept, however old, because those are the ones "
+            "somebody needs to inspect. 0 deletes as soon as a file has been read."
+        ),
+        category="reports",
+        sort_order=62,
+    ),
+    Spec(
+        key="keep_catalog_snapshots_days",
+        default=30,
+        value_type="int",
+        min_value=1,
+        max_value=3650,
+        label="Keep Amazon catalogue snapshots for … days",
+        help_text=(
+            "Each catalogue refresh saves Amazon's own listing report. These are what "
+            "'restore the account to how it looked on a past day' reads, so they are "
+            "worth keeping longer than the other files. About 5 MB each."
+        ),
+        category="reports",
+        sort_order=63,
+    ),
+    Spec(
+        key="min_free_disk_gb",
+        default=2.0,
+        value_type="float",
+        min_value=0.0,
+        max_value=1000.0,
+        label="Warn when free disk space falls below … GB",
+        help_text=(
+            "A full disk stops the sync, and it stops it quietly: the download fails, "
+            "nothing can be written, and Amazon keeps showing whatever it last showed. "
+            "This warns while there is still time to act. 0 switches the check off."
+        ),
+        category="reports",
+        sort_order=64,
+    ),
 
     # ----------------------------------------------------------------- ALERTS
     Spec(
