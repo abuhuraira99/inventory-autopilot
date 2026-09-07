@@ -12,6 +12,16 @@
 # The test suite is built to need neither: it runs on in-memory SQLite with
 # Amazon and the vendor simply not configured, which is also a realistic state
 # (it is what Phase 1 of the rollout looks like).
+#
+# PYTHON VERSION: the three Python jobs below pin 3.14 because that is what the
+# deployment target runs. It was 3.12, which nothing in this project actually
+# used -- so CI was proving something true about a version nobody deployed. The
+# point of a gate is to test what ships.
+#
+# The Docker job stays on the Dockerfile's own 3.12 base image on purpose: that
+# is the Linux/container deployment path in Part 1 of docs/DEPLOYMENT.md, and it
+# is a genuinely different target that deserves its own coverage. Between them
+# the two versions this project can actually be deployed on are both exercised.
 # =============================================================================
 
 name: CI
@@ -43,7 +53,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
@@ -65,7 +75,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
@@ -87,7 +97,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
