@@ -74,6 +74,53 @@ class TestDamagedArchives:
         with pytest.raises(FeedFormatError):
             verify_archive(path)
 
+    def test_no_corruption_anywhere_escapes_as_a_raw_exception(self, tmp_path):
+        """
+        Damage must ALWAYS arrive as FeedFormatError, wherever the damage lands.
+
+        The test above flips a single byte in the middle. WHICH stdlib failure
+        that produces depends on where it lands, so a one-position test passes
+        or fails on luck -- it passed on Windows/CPython 3.14 and failed on
+        Linux/CPython 3.12 with a raw ``zlib.error``, which was the real bug it
+        was supposed to be catching all along.
+
+        The failure this prevents is not a cosmetic one. ``verify_archive`` is
+        called inside the pipeline's per-file handler, which catches
+        FeedFormatError, quarantines that one file and carries on with the
+        others. Anything else escapes that handler and aborts the WHOLE run as
+        "failed unexpectedly" -- so one damaged delta stops a cycle that should
+        merely have skipped it, and the operator is handed a zlib traceback
+        instead of "the download was cut short, it will be retried".
+
+        Walking a flip across every byte of a real archive produced three
+        distinct escapes from the stdlib before the fix -- ``zlib.error``,
+        ``NotImplementedError`` ("zip file version 23.5") and ``OSError``
+        ([Errno 22]). Enumerating them is the losing move, and a different
+        Python or zlib build can invent more. The property is that none of them
+        ever reach the caller.
+        """
+        source = _zip(tmp_path / "feed.zip", "feed.txt", FEED * 200)
+        base = source.read_bytes()
+        target = tmp_path / "corrupt.zip"
+
+        escaped: list[tuple[int, str, str]] = []
+        for position in range(len(base)):
+            raw = bytearray(base)
+            raw[position] ^= 0xFF
+            target.write_bytes(bytes(raw))
+            try:
+                verify_archive(target)
+            except FeedFormatError:
+                pass  # the operator gets a readable message, the run continues
+            except Exception as exc:
+                escaped.append((position, type(exc).__name__, str(exc)))
+
+        assert not escaped, (
+            f"{len(escaped)} of {len(base)} corrupted archives escaped "
+            "verify_archive as something other than FeedFormatError, e.g. byte "
+            f"{escaped[0][0]} -> {escaped[0][1]}: {escaped[0][2]}"
+        )
+
     def test_an_empty_file_is_refused(self, tmp_path):
         path = tmp_path / "empty.zip"
         path.write_bytes(b"")

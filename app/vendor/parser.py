@@ -44,6 +44,7 @@ import hashlib
 import io
 import logging
 import zipfile
+import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -215,7 +216,28 @@ def verify_archive(path: Path) -> tuple[str, int]:
                     "compresses about 2.5x, so this is not a feed file."
                 )
 
-            broken = z.testzip()
+            # testzip() reports damage in TWO ways and only one is a return
+            # value. A member that decompresses but whose checksum disagrees
+            # comes back as the member's name, below. A member whose deflate
+            # stream is structurally broken raises zlib.error from inside
+            # zipfile -- and zlib.error is NOT a subclass of BadZipFile, which
+            # was the only thing this function caught.
+            #
+            # Handled here rather than left to the backstop below purely for the
+            # message: this is the single most common way a real damaged feed
+            # presents (about 1 byte position in 5, measured by walking a flip
+            # across every byte of a real archive), and "its compressed data
+            # could not be decompressed" tells an operator what happened.
+            try:
+                broken = z.testzip()
+            except zlib.error as exc:
+                raise FeedFormatError(
+                    f"{path.name} is damaged: its compressed data could not be "
+                    f"decompressed ({exc}). This usually means the download was cut "
+                    "short, or the vendor was still uploading. It will be retried "
+                    "next cycle."
+                ) from exc
+
             if broken is not None:
                 raise FeedFormatError(
                     f"{path.name} is damaged: the CRC check failed on {broken}. "
@@ -223,10 +245,41 @@ def verify_archive(path: Path) -> tuple[str, int]:
                     "was still uploading. It will be retried next cycle."
                 )
             return members[0].filename, declared
+    except FeedFormatError:
+        # Ours, raised above and already worded for an operator. Re-raised
+        # explicitly because the backstop below would otherwise re-wrap it.
+        raise
     except zipfile.BadZipFile as exc:
         raise FeedFormatError(
             f"{path.name} is not a valid zip archive ({exc}). Most likely an "
             "incomplete download; it will be retried."
+        ) from exc
+    except Exception as exc:
+        # THE BACKSTOP. Catching specific exception types is exactly what let
+        # the zlib.error bug exist: only BadZipFile was listed, so everything
+        # else escaped, bypassed the pipeline's per-file quarantine handler
+        # (which catches FeedFormatError) and aborted the WHOLE run as "failed
+        # unexpectedly" -- instead of setting one bad file aside and carrying on.
+        #
+        # Enumerating the types is not possible by inspection. Walking a byte
+        # flip across every position of a real feed archive produced three
+        # distinct escapes from the stdlib: zlib.error, NotImplementedError
+        # ("zip file version 23.5", from a corrupted version field) and OSError
+        # ([Errno 22], from a corrupted offset). A different Python or zlib
+        # build can produce others.
+        #
+        # So the rule is the contract, not a list: anything that goes wrong
+        # while reading this archive means the file cannot be trusted, which is
+        # precisely what FeedFormatError says. The existence and empty-file
+        # checks run BEFORE this block, so a genuinely missing or unreadable
+        # path is already reported accurately and cannot land here.
+        #
+        # The exception type is kept in the message so that a real code defect
+        # is still identifiable rather than disguised as a damaged download.
+        raise FeedFormatError(
+            f"{path.name} could not be read as a feed archive "
+            f"({type(exc).__module__}.{type(exc).__name__}: {exc}). Most likely an "
+            "incomplete or damaged download; it will be retried next cycle."
         ) from exc
 
 
