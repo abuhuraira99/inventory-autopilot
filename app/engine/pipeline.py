@@ -458,7 +458,13 @@ def _recover_interrupted_batches(
             "starting new work", batch.id,
         )
         try:
-            verify_batch(session, client, batch)
+            # settle_seconds=0 here, unlike a normal verification. That delay
+            # exists because Amazon's listing updates are eventually consistent
+            # and reading back immediately after a push reports false
+            # mismatches. This batch was interrupted at least one scheduler
+            # interval ago, so Amazon has long since settled and the wait would
+            # only delay the start of every run that finds wreckage.
+            verify_batch(session, client, batch, settle_seconds=0)
         except SpApiError as exc:
             # Cannot reach Amazon to check. Leave the batch visible rather than
             # guessing at a status; the next run tries again.

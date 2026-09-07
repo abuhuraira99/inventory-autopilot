@@ -341,6 +341,52 @@ client cares most about.
 
 ---
 
+## Known limitations
+
+Written down rather than left to be discovered. None of these blocks the staged
+rollout in [docs/OPERATIONS.md](docs/OPERATIONS.md); all of them are things a reviewer
+would otherwise have to find.
+
+**It has never run against the real Amazon account.** Amazon's sandbox returns canned
+data and knows nothing about these listings, so there is no way to rehearse the write
+path fully without touching production. Every measurement in this README comes from the
+client's real exported files, and the write path is tested against a faked transport —
+but "tested" and "proven in production" are different claims and only the first is made
+here. This is why the rollout starts in practice mode, then approval mode with a
+whitelist of 25–50 slow-moving products, and why pressing Undo on purpose is a required
+step before widening it.
+
+**`vendor/ftp_client.py` is 23% covered.** FTPS needs a real server to exercise
+meaningfully; a mock returning whatever the test wants proves only that the mock works,
+and the failures that matter here (TLS session reuse on the data channel, passive mode
+through NAT, servers that omit MLSD) are the ones a mock cannot produce. Covered by the
+connection test on the Settings page and the deployment checklist instead.
+
+**There are no CSRF tokens.** Protection comes from `SameSite=Lax` (which blocks
+cross-site POSTs in every current browser), every mutation being POST-only, destructive
+actions requiring a typed confirmation, and the dashboard having no public address. That
+is layered and adequate; an explicit token would still be the next hardening step.
+
+**The run lock is released if its database connection drops mid-run.** A PostgreSQL
+advisory lock lives on its session, which is what makes it self-cleaning after a crash —
+and also means a network blip releases it early. In this deployment that is theoretical:
+one process, one machine, and APScheduler's `max_instances=1` plus a per-session lock
+attempt covers the in-process cases. It would become real if the app were ever scaled to
+two containers, which would need a lease-based lock instead.
+
+**`amazon/feeds.py` (53%) and `amazon/reports.py` (55%) are the thinner of the tested
+modules.** Both are polled asynchronous APIs — submit, wait, fetch a document — and their
+happy paths are covered; the timeout and partial-result branches are not.
+
+**Amazon's `Pricing` role is still granted to the app.** The software refuses to
+transmit a price at the transport layer regardless
+([`app/amazon/guard.py`](app/amazon/guard.py)), so this changes nothing about behaviour.
+Removing the role would make Amazon refuse too, which is a second independent lock on
+the promise the client cares most about. Doing so invalidates the refresh token and
+requires re-authorisation.
+
+---
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
