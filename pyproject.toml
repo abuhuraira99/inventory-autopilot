@@ -56,6 +56,12 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Tests reach into a couple of private attributes on purpose -- notably
+# SpApiClient._client, to substitute an httpx.MockTransport under an otherwise
+# entirely real client. Faking at a public seam instead would mean not
+# exercising the rate limiter, the retries or the price guard.
+"tests/test_pusher.py" = ["SLF001"]
+"tests/test_pipeline_end_to_end.py" = ["SLF001"]
 # Tests may use asserts, hardcoded credentials in fixtures, and long lines.
 "tests/*" = ["S101", "S105", "S106", "E501"]
 # The settings module holds long help strings written for end users.
@@ -73,3 +79,42 @@ ignore = [
 # `ruff check` IS enforced, so the code is consistently linted; it is just
 # formatted deliberately rather than mechanically. If you disagree, the
 # conversation to have is about the aligned tables, not about the setting.
+
+# =============================================================================
+# mypy
+# =============================================================================
+# Deliberately NOT --strict. Strict mode on a SQLAlchemy + FastAPI codebase
+# spends most of its effort on framework generics, and the return is a lot of
+# noise around a small amount of signal. These settings are the subset that
+# catches real defects:
+#
+#   * a function that can return None where the caller assumes a value
+#   * an argument of the wrong type
+#   * an unreachable branch, which usually means a condition that is never true
+#
+# It passes cleanly over app/, and CI enforces that. Three genuine defects in
+# this project were first surfaced by it, including an SFTPClient.from_transport
+# that returns None rather than raising.
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+# Third-party packages vary in how completely they ship type information;
+# missing stubs are not a defect in this codebase.
+ignore_missing_imports = true
+# The checks that pay for themselves.
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+no_implicit_optional = true
+strict_equality = true
+# NOT enabled, and why: the codebase is annotated where annotations help a
+# reader, not exhaustively. Requiring a signature on every internal helper
+# would add ceremony without adding information.
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[[tool.mypy.overrides]]
+# Migrations are generated, then frozen. Type-checking generated DDL adds
+# nothing, and the frozen baseline must not be edited to satisfy a linter.
+module = "migrations.*"
+ignore_errors = true

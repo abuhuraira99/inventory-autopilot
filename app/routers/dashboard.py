@@ -598,7 +598,7 @@ async def reports(
         ).scalars()
     )
 
-    newest = {}
+    newest: dict[str, ReportFile] = {}
     for r in session.execute(
         select(ReportFile).order_by(desc(ReportFile.created_at)).limit(60)
     ).scalars():

@@ -645,6 +645,9 @@ def _coerce(spec: Spec, raw: Any) -> Any:
                 return False
             raise SettingError(f"{spec.label}: expected yes or no, got {raw!r}")
 
+        # Deliberately Any: this function's whole job is to turn one untyped
+        # form field into whichever of nine types the spec declares.
+        value: Any
         if t == "int":
             value = int(str(raw).strip())
         elif t == "float":

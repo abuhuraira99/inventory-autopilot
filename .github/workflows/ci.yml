@@ -57,6 +57,28 @@ jobs:
       # Black-style reflow would collapse alignment that carries meaning. See
       # the stack table in README.md.
 
+  types:
+    name: Types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - run: pip install -r requirements-dev.txt
+
+      # Configured in pyproject.toml, and it passes clean. Not --strict: the
+      # settings there are the subset that finds real defects rather than
+      # framework generics. Three genuine bugs in this project were surfaced by
+      # it first, including a paramiko call that returns None instead of
+      # raising.
+      - name: mypy
+        run: mypy
+
   test:
     name: Tests
     runs-on: ubuntu-latest
@@ -79,7 +101,16 @@ jobs:
           ENVIRONMENT: test
           DATABASE_URL: sqlite+pysqlite:///:memory:
           ENABLE_SCHEDULER: "false"
-        run: pytest -q --cov=app --cov-report=term-missing
+        # The floor is a ratchet against regression, not a target. It sits just
+        # below the current figure deliberately: a gate set at exactly today's
+        # number fails on unrelated refactors and gets removed within a month.
+        #
+        # Note where the coverage is, not just how much. The modules that can
+        # change a live Amazon account are the well-covered ones; what remains
+        # thin is the FTP transport, which needs a real server to exercise
+        # meaningfully and is covered by the deployment tests in
+        # docs/OPERATIONS.md instead.
+        run: pytest -q --cov=app --cov-report=term-missing --cov-fail-under=65
 
   docker:
     name: Docker build

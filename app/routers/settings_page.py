@@ -27,8 +27,9 @@ TWO THINGS THE PAGE REFUSES TO DO
 from __future__ import annotations
 
 import logging
+from typing import Any
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -149,6 +150,7 @@ async def save_settings(
         if spec.locked:
             continue  # never editable from the web
 
+        raw: Any
         if spec.value_type == "bool":
             # An unchecked checkbox is absent from the form, which is how HTML
             # works and why booleans need special handling.
@@ -434,7 +436,11 @@ async def start_2fa(
     request: Request,
     session: Session = Depends(get_session),
     who: SessionData = Depends(require_login),
-) -> HTMLResponse:
+) -> Response:
+    # Annotated as the base Response, not a union of the two concrete classes
+    # it can return. FastAPI reads the return annotation to build a response
+    # model, and a union of Response subclasses is not something it recognises
+    # -- it raises at import time. A Response subclass is skipped, as intended.
     """
     Begin two-factor enrolment.
 
