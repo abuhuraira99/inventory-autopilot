@@ -22,19 +22,21 @@ Just two steps:
 Access tokens last one hour. Refresh tokens do not expire on their own -- they
 last until somebody revokes them in Seller Central, or the app's roles change.
 
-WHAT THE CLIENT HAS SUPPLIED
-============================
-    refresh token   Atzr|IwEBI<supplied>        supplied
-    client id       amzn1.application-oa2-client.446... supplied
-    seller id       A1EXAMPLESELLER                      supplied
-    app id          amzn1.sp.solution.a0ba4eae-...      supplied
-    CLIENT SECRET   ---                                 *** MISSING ***
+WHAT IS NEEDED, AND WHERE IT LIVES
+==================================
+    refresh token   encrypted in the database, entered on the Settings page
+    client secret   encrypted in the database, entered on the Settings page
+    client id       .env as LWA_CLIENT_ID    -- an identifier, not a secret
+    seller id       .env as SELLER_ID        -- an identifier, not a secret
 
-The client secret is the one piece that has not been provided. Without it no
-token can be obtained and no Amazon call can succeed. It is found in Seller
-Central under Apps and Services -> Develop Apps -> the app -> "LWA credentials"
--> View. :func:`missing_credentials` produces the message the dashboard shows
-so the client is told exactly this, rather than seeing a raw 400.
+The two genuine secrets are deliberately NOT put in .env and never appear in
+this repository. They are typed into the dashboard once, encrypted with
+AES-256-GCM under MASTER_KEY, and are never rendered back to any page.
+
+If either is absent, :func:`missing_credentials` produces the message the
+dashboard shows -- naming the exact Seller Central screen it comes from (Apps
+and Services -> Develop Apps -> the app -> "LWA credentials" -> View) rather
+than letting the operator see a raw 400.
 
 CACHING
 =======

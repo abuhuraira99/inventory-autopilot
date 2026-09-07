@@ -171,8 +171,8 @@ You will end up with:
 
 | Value | Where | Looks like |
 |---|---|---|
-| **Client ID** | Develop Apps → your app → LWA credentials | `amzn1.application-oa2-client.4462…` |
-| **Client Secret** | same screen → **View** | a long random string, **no** `amzn1.` prefix |
+| **Client ID** | Develop Apps → your app → LWA credentials | `amzn1.application-oa2-client.<32 hex characters>` |
+| **Client Secret** | same screen → **View** | `amzn1.oa2-cs.v1.<64 hex characters>`, or on older accounts a bare 64-character string |
 | **Refresh Token** | Authorize → Authorize app | `Atzr\|IwEBI…` about 400 characters |
 | **Seller ID** | Settings → Account Info → Merchant Token | `A1EXAMPLESELLER` |
 
