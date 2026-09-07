@@ -112,6 +112,58 @@ class RollbackPlan:
 # Planning
 # ===========================================================================
 
+def _believed_current_quantity(item: PushItem, listing: AmazonListing) -> int | None:
+    """
+    The best evidence available for what Amazon shows for this SKU *now*.
+
+    WHY THIS IS NOT SIMPLY ``listing.quantity``
+    ===========================================
+    ``amazon_listings.quantity`` is a cache of the All Listings Report, which is
+    refreshed once a day. After a push it is refreshed for the items that
+    verification actually read back -- and verification *samples*: 100 items out
+    of a batch of 5,000 (see VERIFY_SAMPLE_THRESHOLD in app/engine/pusher.py).
+
+    So for roughly 4,900 items in a full batch, ``listing.quantity`` still holds
+    the value from before the push. That value is, by definition,
+    ``item.previous_quantity``.
+
+    An earlier version of :func:`plan_rollback` compared ``listing.quantity``
+    against ``previous_quantity`` and skipped the item when they matched, on the
+    reasoning "Amazon already shows the value we would restore, so there is
+    nothing to do". Applied to a stale cache, that reasoning inverted the
+    safeguard: pressing Undo shortly after a large automatic run would skip
+    almost every item and report "already showing 7" for products Amazon was
+    showing as 0. The undo would appear to succeed and change nothing.
+
+    That is the worst failure this system could have. Undo is the reason it is
+    considered safe to point at a live revenue-generating account at all.
+
+    THE ORDER OF EVIDENCE
+    =====================
+        1. ``verified_quantity`` -- we read this SKU back from Amazon after the
+           push. Direct observation, strongest evidence.
+        2. ``new_quantity`` when the item was ACCEPTED or VERIFIED -- we sent
+           this value and Amazon acknowledged it. Not proof it stuck (which is
+           what verification is for), but far better evidence than a day-old
+           cache.
+        3. ``listing.quantity`` -- the catalogue cache. Used only when the item
+           was never successfully sent, which is exactly the case where the
+           cache has not been invalidated.
+
+    ERRING TOWARDS INCLUDING AN ITEM IS THE SAFE DIRECTION
+    ======================================================
+    Restoring a quantity Amazon already holds is a no-op: the same number is
+    written twice. Failing to restore one leaves the client selling stock that
+    is not there. When the evidence is ambiguous, this function prefers to
+    include.
+    """
+    if item.verified_quantity is not None:
+        return item.verified_quantity
+    if item.result in (ItemResult.ACCEPTED, ItemResult.VERIFIED):
+        return item.new_quantity
+    return listing.quantity
+
+
 def plan_rollback(session: Session, batch_ids: list[int]) -> RollbackPlan:
     """
     Work out what undoing these batches would send. Sends nothing.
@@ -182,7 +234,7 @@ def plan_rollback(session: Session, batch_ids: list[int]) -> RollbackPlan:
                 )
                 continue
 
-            current = listing.quantity
+            current = _believed_current_quantity(item, listing)
             if current == item.previous_quantity:
                 plan.skipped.append(
                     (item.seller_sku, f"already showing {item.previous_quantity}")
