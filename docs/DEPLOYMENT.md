@@ -205,7 +205,7 @@ sudo ufw enable
 # Keys only, no password login
 sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-sudo systemctl restart sshd
+sudo systemctl restart ssh    # on Ubuntu 22.04+ the unit is 'ssh', not 'sshd'
 
 # Automatic security updates
 sudo apt install -y unattended-upgrades fail2ban
