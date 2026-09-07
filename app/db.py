@@ -109,6 +109,48 @@ def session_scope() -> Iterator[Session]:
         s.close()
 
 
+def checkpoint(session: Session, what: str) -> None:
+    """
+    Commit everything recorded so far, and say so in the log.
+
+    WHY THIS EXISTS
+    ===============
+    A pipeline run has a side effect that no database transaction can contain:
+    it changes quantities on Amazon. The moment a quantity is patched, the fact
+    of that change exists in the world whether or not our transaction later
+    commits.
+
+    So the ordering rule for this system is absolute:
+
+        the record of what we are about to do must be DURABLE
+        before we do it.
+
+    Concretely, ``push_items.previous_quantity`` -- the undo trail -- is written
+    and committed *before* :func:`app.engine.pusher.send_batch` sends anything.
+    If the container is killed mid-send (a deploy, an OOM, a VPS reboot), the
+    batch is still on disk, marked SENDING, with every previous quantity
+    recorded. The next run can verify against Amazon and put things right, and
+    a human can still press Undo.
+
+    Held in one transaction instead, that same crash would leave Amazon changed
+    and no record of what it had been -- which would quietly break the one
+    promise this system makes.
+
+    A checkpoint also bounds transaction length. A run upserts on the order of a
+    million vendor rows and then spends minutes inside Amazon's rate limits; a
+    single transaction spanning all of it would hold a snapshot open long enough
+    to block autovacuum and bloat the tables.
+
+    Committing mid-run means a later failure does NOT roll back earlier stages.
+    That is intended. Partial progress with an accurate record is strictly
+    better here than atomicity that cannot include Amazon anyway; every stage is
+    written to be idempotent and to re-derive its state from Amazon on the next
+    run.
+    """
+    session.commit()
+    log.debug("checkpoint: %s", what)
+
+
 @contextmanager
 def run_lock(*, lock_id: int = RUN_LOCK_ID) -> Iterator[bool]:
     """
@@ -129,6 +171,15 @@ def run_lock(*, lock_id: int = RUN_LOCK_ID) -> Iterator[bool]:
             ...do the run...
     """
     if settings.database_url.startswith("sqlite"):
+        # Tests only. app.config.Settings.startup_problems refuses to boot a
+        # production process on SQLite precisely because this degradation is
+        # invisible -- see the note there. Logged at WARNING rather than DEBUG so
+        # that if it somehow ever happens outside a test run, it is in the log
+        # before the damage rather than after it.
+        log.warning(
+            "run lock skipped: the database is SQLite, which has no advisory locks. "
+            "Overlapping runs are NOT prevented. This is only ever acceptable in tests."
+        )
         yield True
         return
 

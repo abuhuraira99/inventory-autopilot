@@ -41,9 +41,10 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.amazon.client import SpApiClient
+from app.amazon.client import SpApiClient, SpApiError
 from app.config import settings as app_settings
 from app.core import settings_store
+from app.db import checkpoint
 from app.engine import guardrails as rails
 from app.engine.decision import (
     Decision,
@@ -60,7 +61,10 @@ from app.models import (
     FeedFile,
     FeedKind,
     FileStatus,
+    ItemResult,
     Notification,
+    PushBatch,
+    PushItem,
     ReportFile,
     Run,
     RunStatus,
@@ -155,6 +159,9 @@ def execute_run(
     )
     session.add(run)
     session.flush()
+    # Durable immediately, so the dashboard shows a run in progress and a crash
+    # leaves evidence that this run started. See app.db.checkpoint.
+    checkpoint(session, f"run {run.id} opened")
     outcome = RunOutcome(run_id=run.id, status=RunStatus.RUNNING)
 
     log.info(
@@ -176,6 +183,14 @@ def execute_run(
         return outcome
 
     try:
+        # ---- stage 0: clear up after an interrupted run ------------------
+        # Before doing anything new, settle any batch a previous run left
+        # mid-flight. Doing this first means the catalogue picture used by this
+        # run's decisions already reflects whatever the interrupted batch
+        # actually achieved.
+        if client is not None:
+            _recover_interrupted_batches(session, run, client, cfg, outcome)
+
         # ---- stages 1-3: the vendor side --------------------------------
         processed_files, parse_stats, touched = _ingest(
             session, run, cfg, vendor_credentials, outcome
@@ -185,12 +200,19 @@ def execute_run(
             _finish(run)
             return outcome
 
+        # The vendor's data and the feed_files rows are made durable here. The
+        # dedupe-by-content-hash record in particular: without this commit a
+        # later failure would roll it back and the same file would be downloaded
+        # and reprocessed on every subsequent cycle.
+        checkpoint(session, f"run {run.id} vendor data stored")
+
         # A full feed among the processed files means reconcile everything.
         saw_full_feed = any(f.kind is FeedKind.FULL for f in processed_files)
         reconcile = force_full_reconcile or saw_full_feed
 
         # ---- reports, regardless of whether Amazon is configured --------
         _write_reports(session, run, cfg, processed_files, touched, outcome)
+        checkpoint(session, f"run {run.id} reports written")
 
         if client is None:
             run.status = RunStatus.COMPLETED
@@ -266,6 +288,23 @@ def execute_run(
         outcome.batch_id = batch.id
         by_sku = {d.seller_sku: d for d in batch_decisions}
 
+        # ===================================================================
+        # THE DURABILITY BARRIER. Do not move anything below this line above
+        # it, and do not remove it.
+        #
+        # create_batch has just written one push_items row per SKU, each
+        # carrying previous_quantity -- Amazon's own current value, and the only
+        # thing an undo can be reconstructed from. Everything after this point
+        # can change quantities on a live Amazon account, and an Amazon change
+        # cannot be rolled back by a database transaction.
+        #
+        # Committing here means that if this process is killed mid-send, the
+        # batch survives on disk with every previous quantity intact, marked
+        # SENDING so a human and the next run both know its outcome is unknown
+        # and must be verified against Amazon.
+        # ===================================================================
+        checkpoint(session, f"run {run.id} batch {batch.id} recorded before any send")
+
         if run.mode is SyncMode.DRY_RUN:
             batch.status = BatchStatus.PENDING
             batch.notes = "Practice mode: nothing was sent."
@@ -300,9 +339,14 @@ def execute_run(
             run.pushed_changes = summary.accepted
             outcome.pushed = summary.accepted
             outcome.errors.extend(summary.errors)
+            # What Amazon accepted and rejected, made durable before the
+            # verification pass -- which sleeps, then makes thousands more
+            # calls, and so is the most likely place to be interrupted.
+            checkpoint(session, f"run {run.id} batch {batch.id} send results recorded")
 
             if cfg.get("verify_after_push") and summary.accepted:
                 verify_batch(session, client, batch)
+                checkpoint(session, f"run {run.id} batch {batch.id} verified")
 
             if summary.errors:
                 run.status = RunStatus.FAILED
@@ -353,6 +397,119 @@ def execute_run(
 
     _finish(run)
     return outcome
+
+
+# ===========================================================================
+# Stage 0: recovery
+# ===========================================================================
+
+def _recover_interrupted_batches(
+    session: Session,
+    run: Run,
+    client: SpApiClient,
+    cfg: dict,
+    outcome: RunOutcome,
+) -> None:
+    """
+    Settle any batch left in SENDING by a run that was killed mid-send.
+
+    WHY A BATCH CAN BE STRANDED
+    ===========================
+    ``send_batch`` commits the SENDING status before its first call to Amazon,
+    deliberately (see :func:`app.db.checkpoint`). So a deploy, an OOM kill or a
+    VPS reboot part-way through a send leaves a batch marked SENDING with some
+    items ACCEPTED and the rest still PENDING.
+
+    WHY "ANY SENDING BATCH IS ABANDONED" IS SAFE TO ASSUME
+    ======================================================
+    The advisory run lock guarantees that at most one run executes at a time,
+    and this function runs before this run sends anything. A batch still marked
+    SENDING at this moment therefore cannot belong to a live send -- there is no
+    other run. That removes the need for an age heuristic, which would either
+    act too early or leave wreckage lying around.
+
+    WHAT IS DONE, AND WHAT IS DELIBERATELY NOT
+    ==========================================
+    ACCEPTED items are verified against Amazon, which is the same machinery a
+    normal run uses and settles the question "did the change actually land".
+
+    PENDING items are marked SKIPPED and NOT resent here. They were never sent,
+    and this run's own decision pass will propose them again if Amazon still
+    disagrees with the vendor -- because decisions are made against Amazon's
+    reported quantity rather than against the previous feed. Resending them from
+    inside a recovery routine would duplicate that work and bypass this run's
+    guardrails and change limit.
+
+    An item that WAS sent but whose ACCEPTED status did not survive the crash is
+    covered by the same self-healing property, and its ``previous_quantity`` was
+    committed before the send, so Undo still works for it.
+    """
+    stranded = list(
+        session.execute(
+            select(PushBatch).where(PushBatch.status == BatchStatus.SENDING)
+        ).scalars()
+    )
+    if not stranded:
+        return
+
+    for batch in stranded:
+        log.warning(
+            "batch %d was left mid-send by an interrupted run; settling it before "
+            "starting new work", batch.id,
+        )
+        try:
+            verify_batch(session, client, batch)
+        except SpApiError as exc:
+            # Cannot reach Amazon to check. Leave the batch visible rather than
+            # guessing at a status; the next run tries again.
+            log.error("could not settle stranded batch %d: %s", batch.id, exc)
+            outcome.errors.append(f"batch {batch.id} could not be settled: {exc}")
+            continue
+
+        never_sent = list(
+            session.execute(
+                select(PushItem).where(
+                    PushItem.batch_id == batch.id,
+                    PushItem.result == ItemResult.PENDING,
+                )
+            ).scalars()
+        )
+        for item in never_sent:
+            item.result = ItemResult.SKIPPED
+            item.amazon_message = (
+                "The run was interrupted before this item was sent. Nothing reached "
+                "Amazon for it, and it will be proposed again if Amazon still "
+                "disagrees with the vendor."
+            )
+
+        if batch.status is BatchStatus.SENDING:
+            # verify_batch only promotes to VERIFIED when everything it checked
+            # stuck. Anything short of that is recorded honestly rather than
+            # rounded up to success.
+            batch.status = (
+                BatchStatus.PARTIALLY_FAILED if never_sent else BatchStatus.SENT
+            )
+        batch.notes = (
+            (batch.notes + " | " if batch.notes else "")
+            + f"Recovered by run {run.id} after an interrupted send: "
+            + f"{len(never_sent):,} item(s) had not been sent."
+        )
+
+        _notify(
+            session, run, "push_failure", "warning",
+            f"Batch {batch.id} was interrupted mid-send and has been checked",
+            (
+                f"A previous run stopped part-way through sending batch {batch.id}.\n\n"
+                f"It has now been read back from Amazon. {len(never_sent):,} item(s) "
+                "had not been sent and will be proposed again on a later run if they "
+                "are still needed.\n\n"
+                "Nothing was lost: the previous quantity of every item in the batch "
+                "was recorded before the send began, so Undo still works.\n\n"
+                f"Details: {app_settings.base_url}/batches/{batch.id}"
+            ),
+            cfg,
+        )
+        checkpoint(session, f"run {run.id} settled stranded batch {batch.id}")
 
 
 # ===========================================================================
@@ -481,7 +638,15 @@ def _ingest(
                 record.content_sha256 = digest
                 known_hashes.add(digest)
 
-                verify_archive(local)  # CRC check: catches a truncated download
+                # CRC check plus the size and ratio bounds: catches a truncated
+                # download, which is the failure that would look like "the
+                # vendor has sold out of everything".
+                #
+                # The member name is kept and handed to the parse below so the
+                # archive is expanded once per run rather than twice. On the
+                # 75 MB full feed that is a meaningful saving, and on a delta
+                # arriving every five minutes it is free.
+                member_name, _ = verify_archive(local)
                 record.status = FileStatus.VERIFIED
                 session.flush()
 
@@ -496,7 +661,9 @@ def _ingest(
 
             # ---- stages 2-3: parse and store ---------------------------
             try:
-                stats = _parse_and_store(session, run, cfg, record, local, touched)
+                stats = _parse_and_store(
+                    session, run, cfg, record, local, touched, member_name=member_name
+                )
             except FeedFormatError as exc:
                 record.status = FileStatus.QUARANTINED
                 record.quarantine_reason = str(exc)
@@ -524,12 +691,17 @@ def _parse_and_store(
     record: FeedFile,
     path: Path,
     touched: dict[str, tuple[int, int | None]],
+    *,
+    member_name: str | None = None,
 ) -> ParseStats:
     """
     Stages 2 and 3 for one file: parse, gate, and upsert.
 
     Streams the file, so a 1.15-million-row full feed never exists in memory
     all at once.
+
+    ``member_name`` is the archive member the caller has already verified. See
+    :func:`app.vendor.parser.iter_rows` for why it is a name rather than a flag.
     """
     delimiter = str(cfg["feed_delimiter"])
     column_map = dict(cfg["column_map"])
@@ -545,7 +717,11 @@ def _parse_and_store(
     stats = ParseStats()
 
     for row, reject, stats in iter_rows(
-        path, delimiter=delimiter, column_map=column_map, strict_header=strict
+        path,
+        delimiter=delimiter,
+        column_map=column_map,
+        strict_header=strict,
+        member_name=member_name,
     ):
         if reject is not None:
             # Rejects are recorded, not dropped -- a rising trend means the

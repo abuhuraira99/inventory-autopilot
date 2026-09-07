@@ -179,7 +179,12 @@ def send_batch(
     summary = PushSummary(batch_id=batch.id, method=batch.method, submitted=len(items))
     batch.status = BatchStatus.SENDING
     batch.sent_at = utcnow()
-    session.flush()
+    # Committed, not merely flushed. SENDING is the one status that must survive
+    # this process being killed: it is the difference between "we know nothing
+    # was sent" and "something may have reached Amazon, go and verify". A
+    # flushed-but-uncommitted SENDING would be rolled back by the crash and the
+    # batch would look untouched while Amazon had in fact been changed.
+    session.commit()
 
     decisions_by_sku = decisions_by_sku or {}
 
