@@ -1,5 +1,10 @@
 # Inventory Autopilot
 
+[![CI](https://github.com/abuhuraira99/inventory-autopilot/actions/workflows/ci.yml/badge.svg)](https://github.com/abuhuraira99/inventory-autopilot/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
+[![Checks: 271 tests · ruff · mypy](https://img.shields.io/badge/checks-271%20tests%20%C2%B7%20ruff%20%C2%B7%20mypy-brightgreen.svg)](CONTRIBUTING.md)
+
 Keeps Amazon stock quantities in step with a supplier's data feed, automatically.
 
 **It changes stock quantity and nothing else. It never changes prices.**
@@ -45,7 +50,10 @@ That last figure is the accumulated cost of doing this by hand.
 | setting up the Amazon app | [docs/AMAZON-APP-SETUP.md](docs/AMAZON-APP-SETUP.md) |
 | running it day to day | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
 | a developer picking this up | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), then [`app/core/barcode.py`](app/core/barcode.py) |
-| reviewing the security | [docs/SECURITY.md](docs/SECURITY.md) |
+| reviewing the security | [docs/SECURITY.md](docs/SECURITY.md), and [SECURITY.md](SECURITY.md) for the reporting policy |
+| **reviewing this codebase** | [CONTRIBUTING.md](CONTRIBUTING.md) — the four things that are load-bearing, and why |
+| wondering what has changed, and what was wrong | [CHANGELOG.md](CHANGELOG.md) |
+| deploying on Windows Server | [docs/WINDOWS-DEPLOYMENT.md](docs/WINDOWS-DEPLOYMENT.md) |
 | wondering what the data actually showed | [docs/STAGE-0-FINDINGS.md](docs/STAGE-0-FINDINGS.md) |
 
 ---
@@ -222,12 +230,12 @@ python scripts/stage0_coverage.py \
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-pytest                    # 255 tests, no network, no live database
+pytest                    # 271 tests, no network, no live database
 ruff check .
 mypy                      # configured in pyproject.toml; passes clean
 ```
 
-**255 tests, 68% coverage, and mypy clean.** The suite never touches the network or a
+**271 tests, ~69% coverage, and mypy clean.** The suite never touches the network or a
 real database — a test that could reach Amazon is a test that could change a live
 listing. Amazon is faked at the HTTP transport with `httpx.MockTransport` underneath a
 real `SpApiClient`, so the rate limiter, the retry logic, the token refresh and the
@@ -308,7 +316,7 @@ app/
 docs/                    architecture, deployment, security, operations
 migrations/              Alembic, with a frozen explicit-DDL baseline
 scripts/stage0_coverage.py   measure the catalogue offline
-tests/                   255 tests
+tests/                   271 tests
 ```
 
 ---
@@ -320,7 +328,7 @@ tests/                   255 tests
 | Vendor side (fetch, parse, store, reports) | ✅ built and validated against real feeds |
 | Amazon read (catalogue, mapping, coverage) | ✅ built and validated against the real report |
 | Amazon write (quantity patch, bulk feed) | ✅ built — **needs the app's `Product Listing` role** |
-| Dashboard, settings, audit, undo | ✅ built, 255 tests, mypy clean |
+| Dashboard, settings, audit, undo | ✅ built, 271 tests, mypy clean |
 
 **Both original blockers are now cleared** (confirmed 7 September 2026):
 

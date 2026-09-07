@@ -38,9 +38,13 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import CursorResult
 
 from app.amazon.client import SpApiClient, SpApiError
 from app.config import settings as app_settings
@@ -531,6 +535,29 @@ def _housekeeping(session: Session, run: Run, cfg: dict, outcome: RunOutcome) ->
             "freeing %.1f MB",
             removed_feeds, removed_reports, removed_snapshots, freed / 1024**2,
         )
+
+    # ---- vendor change history -------------------------------------------
+    # The largest table in the database, and the only unbounded one left. A row
+    # is written for every stock OR price change, and the first full feed alone
+    # writes 1,158,340 of them. Price changes are included even though this
+    # system never acts on a price, because the reports the client's team
+    # already uses are built from them.
+    #
+    # Deleted in one statement rather than by loading rows: at these volumes
+    # fetching them into the session to delete them individually would be slower
+    # than the sync it is tidying up after.
+    keep_history = int(cfg.get("keep_vendor_history_days", 180))
+    history_cutoff = now - timedelta(days=keep_history)
+    # cast: Session.execute is typed as returning Result, but a DML statement
+    # returns a CursorResult, which is where rowcount lives.
+    deleted_history = cast(
+        "CursorResult[Any]",
+        session.execute(
+            delete(VendorProductHistory).where(VendorProductHistory.at < history_cutoff)
+        ),
+    ).rowcount
+    if deleted_history:
+        log.info("housekeeping: removed %s vendor history row(s)", f"{deleted_history:,}")
 
     # ---- the warning that matters ----------------------------------------
     threshold_gb = float(cfg.get("min_free_disk_gb", 2.0))

@@ -1,0 +1,36 @@
+# Dependency updates.
+#
+# WHY WEEKLY AND GROUPED, NOT DAILY AND SEPARATE
+# Every version in requirements.txt is pinned exactly, on purpose: the software that
+# passed the tests must be the software that runs against a live seller account. That
+# makes updates a deliberate act rather than background noise, so these arrive once a
+# week, grouped, as something to review rather than a stream of individual pull requests
+# nobody reads.
+#
+# Security updates are separated out and ungrouped, because those are worth looking at
+# on their own.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      runtime:
+        applies-to: version-updates
+        patterns: ["*"]
+        exclude-patterns: ["pytest*", "ruff", "mypy", "types-*"]
+      tooling:
+        applies-to: version-updates
+        patterns: ["pytest*", "ruff", "mypy", "types-*"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore(ci)"

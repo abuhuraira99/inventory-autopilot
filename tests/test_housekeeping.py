@@ -259,6 +259,51 @@ class TestCatalogueSnapshots:
 
 
 # ===========================================================================
+# Vendor change history -- the biggest table
+# ===========================================================================
+
+
+class TestVendorHistory:
+    def test_old_history_is_pruned_and_recent_history_kept(self, session, run, data_dir):
+        """
+        The largest table in the database and the last unbounded one. A row is
+        written for every stock OR price change, and the first full feed alone
+        writes 1,158,340 of them. On a small disk this is what fills it.
+        """
+        from app.models import VendorProductHistory
+
+        old = VendorProductHistory(
+            barcode="0015047810567", change_type="stock",
+            old_stock=131, new_stock=0, at=utcnow() - timedelta(days=400),
+        )
+        recent = VendorProductHistory(
+            barcode="0008811060626", change_type="price",
+            old_price=9.84, new_price=10.10, at=utcnow() - timedelta(days=5),
+        )
+        session.add_all([old, recent])
+        session.flush()
+        cfg = _cfg(session, keep_vendor_history_days=180)
+
+        _housekeeping(session, run, cfg, RunOutcome(run_id=run.id, status=run.status))
+
+        remaining = {h.barcode for h in session.query(VendorProductHistory).all()}
+        assert remaining == {"0008811060626"}, (
+            "expected only the recent row to survive"
+        )
+
+    def test_the_minimum_retention_is_enforced_by_the_setting(self, session):
+        """
+        Seven days is the floor. The table is what the client's own reports are
+        built from, so someone trimming it to nothing would break those rather
+        than just save space -- the setting refuses rather than allowing it.
+        """
+        from app.core.settings_store import SettingError
+
+        with pytest.raises(SettingError):
+            settings_store.set_value(session, "keep_vendor_history_days", 1, actor="test")
+
+
+# ===========================================================================
 # The disk warning
 # ===========================================================================
 

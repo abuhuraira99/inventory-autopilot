@@ -563,6 +563,24 @@ SPECS: list[Spec] = [
         sort_order=63,
     ),
     Spec(
+        key="keep_vendor_history_days",
+        default=180,
+        value_type="int",
+        min_value=7,
+        max_value=3650,
+        label="Keep vendor change history for … days",
+        help_text=(
+            "Every time the vendor changes a product's stock or price, a row is written "
+            "so the question 'what did this cost in March' can still be answered. The "
+            "first full feed alone writes 1.15 million of them, and the table grows for "
+            "as long as the system runs, so old rows are eventually removed. This is the "
+            "largest table in the database and the one most likely to fill a small disk. "
+            "Six months is well past the point anyone has asked."
+        ),
+        category="reports",
+        sort_order=65,
+    ),
+    Spec(
         key="min_free_disk_gb",
         default=2.0,
         value_type="float",
