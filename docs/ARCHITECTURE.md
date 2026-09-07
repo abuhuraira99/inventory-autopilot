@@ -272,8 +272,18 @@ row per SKU per batch.
 ### `push_items.previous_quantity`
 
 The most important column in the database. It is captured from `amazon_listings`
-**immediately before the send**, so it reflects what Amazon actually had rather than
-what we assumed. Everything about undo depends on it.
+**immediately before the send**, so it reflects Amazon's own reported quantity rather
+than anything this system inferred. Everything about undo depends on it.
+
+Be precise about what that does and does not claim. `amazon_listings` is the catalogue
+cache, refreshed by the All Listings Report rather than by a live read per SKU at push
+time — 5,000 individual reads would cost 5,000 requests for a batch. So
+`previous_quantity` is Amazon's last *reported* value, which can be up to a catalogue
+refresh old; `check_catalog_freshness` warns once that gets beyond 48 hours. The
+consequence worth knowing: if somebody edits a quantity by hand in Seller Central
+between the last refresh and a push, undo restores the value from before their edit.
+That is inherent to reconciling against a periodically-fetched report, not a defect —
+but it is the reason catalogue freshness is a guardrail and not a detail.
 
 This is also why `decision.py` refuses to push a listing whose Amazon quantity is
 unknown (`SkipReason.NO_AMAZON_QUANTITY`) — pushing blind would work, but it would make
@@ -378,7 +388,7 @@ column name and turns `seller-sku` into `﻿seller-sku` — silently breaking a 
 
 ## Testing
 
-255 tests, 68% coverage, mypy clean. **No network, no live database.** A test that could
+271 tests, ~69% coverage, mypy clean. **No network, no live database.** A test that could
 reach Amazon is a test that could change a live listing, and that must not exist in a CI
 pipeline. Anything needing a live service is `@pytest.mark.integration` and excluded by
 default.
@@ -400,6 +410,7 @@ would silently exclude the check the client exists to perform.
 | `test_lwa.py` | token caching, the double-checked lock, and the operator-facing auth messages |
 | `test_config_guards.py` | the configurations production must refuse to start with |
 | `test_web.py` | every page renders; nothing is public; **no secret ever reaches a browser** |
+| doctests in `app/` | the documented examples are executed, so docs cannot drift |
 
 ### The one deliberate gap
 
@@ -409,7 +420,6 @@ failures that matter here (TLS session reuse across the data channel, passive mo
 through NAT, MLSD missing on some servers) are exactly the ones a mock cannot produce.
 It is covered by the connection test on the Settings page and by the deployment
 checklist in `OPERATIONS.md` instead. Stated rather than hidden behind an average.
-| doctests in `app/` | the documented examples are executed, so docs cannot drift |
 
 `tests/conftest.py` holds real production data as fixtures — actual feed rows, actual
 SKUs including the malformed ones found live (`": HA-INGR-…"`, `"A-AMS-…"` with a

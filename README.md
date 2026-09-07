@@ -51,7 +51,7 @@ That last figure is the accumulated cost of doing this by hand.
 | running it day to day | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
 | a developer picking this up | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), then [`app/core/barcode.py`](app/core/barcode.py) |
 | reviewing the security | [docs/SECURITY.md](docs/SECURITY.md), and [SECURITY.md](SECURITY.md) for the reporting policy |
-| **reviewing this codebase** | [CONTRIBUTING.md](CONTRIBUTING.md) — the four things that are load-bearing, and why |
+| **reviewing this codebase** | [CONTRIBUTING.md](CONTRIBUTING.md) — the five things that are load-bearing, and why |
 | wondering what has changed, and what was wrong | [CHANGELOG.md](CHANGELOG.md) |
 | wondering what the data actually showed | [docs/FINDINGS.md](docs/FINDINGS.md) |
 

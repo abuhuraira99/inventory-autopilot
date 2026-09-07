@@ -1,6 +1,6 @@
 # Working on this codebase
 
-Read this before your first change. It is short, and most of it is about the four
+Read this before your first change. It is short, and most of it is about the five
 things in here that are load-bearing in ways that are not obvious from the code.
 
 ---
@@ -22,7 +22,7 @@ is a test that can change a live listing.
 
 ---
 
-## The four things you must not break
+## The five things you must not break
 
 These are not style preferences. Each one has a comment in the code explaining it, and
 each one exists because getting it wrong costs the client money.
@@ -85,6 +85,26 @@ Monday     vendor says 0 → change detected → upload → FAILS SILENTLY
 Tuesday    vendor still 0 → "no change" → nothing sent
 forever    Amazon keeps selling a product with no stock
 ```
+
+### 5. Full feeds and delta feeds are not interchangeable
+
+This is the distinction most likely to be broken by a well-meaning refactor, because the
+two files look alike and differ only in what their *silence* means.
+
+| | Delta feed | Full feed |
+|---|---|---|
+| Contains | only what changed | everything the vendor carries |
+| A barcode's **absence** means | **unchanged** | **the vendor has dropped it** |
+| May zero a missing product | **never** | yes, per the threshold setting |
+| Triggers a full reconcile | no | yes |
+| Real size | 23–320 rows | ~1,158,340 rows |
+
+Read one as the other and you get one of two failures: dead stock left on sale forever,
+or the catalogue zeroed. `FeedKind` is explicit on every `FeedFile` row for exactly this
+reason, and `_mark_missing_from_full_feed` in
+[`app/engine/pipeline.py`](app/engine/pipeline.py) is the only place the dropped-product
+counter moves. The longer version, including why a full feed forces a reconcile, is in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
