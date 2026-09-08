@@ -20,6 +20,31 @@ Everything in this group was invisible until the software was installed on a mac
 nobody had installed it on before. Two were defects in code that the whole test suite,
 ruff and mypy all passed over; one was a gate that had never once run.
 
+- **The log redaction filter destroyed the message it was protecting, and printed the
+  secret anyway.** `RedactingFilter` redacted the format template and the arguments
+  separately. The "names itself a secret" pattern matched `password : %s` and replaced the
+  *value* part — which in a template is the placeholder — so the template came out one
+  `%s` short while `record.args` still held all three arguments. Every such record then
+  died inside the handler with `TypeError: not all arguments converted during string
+  formatting`, **and Python's logging error path printed the unformatted message followed
+  by `Arguments:` with the raw secret still in it.** The redaction did not merely fail, it
+  inverted: the message was destroyed *and* the secret was published.
+  It killed the single most important log line on a new install — the banner carrying the
+  generated administrator password, printed exactly once, stored nowhere, unrecoverable.
+  On the first real deployment the operator's only copy of that password arrived via the
+  crash dump. The filter now interpolates first and redacts the finished line, so the
+  patterns see values rather than placeholders, `%d` keeps working, arguments are dropped
+  once folded in, and a secret is caught wherever it came from.
+  **`RedactingFilter` had no test coverage at all** despite sitting on the root logger and
+  on uvicorn's loggers — which is how a filter that has now broken twice in the same way
+  broke twice. It has its own file, `tests/test_logging_redaction.py`, 11 tests, including
+  the `%d` failure from the earlier version so that one cannot return either.
+- **The administrator banner deliberately has no colons after its labels.** Interpolating
+  before redacting is correct, and it means `password: <value>` in any message is stripped
+  — including that banner, whose entire purpose is to display the value. The banner is now
+  a module constant with the labels unpunctuated, and two tests fail if a colon is tidied
+  back in, because the consequence is an operator locked out of a fresh install with no
+  way to recover the password.
 - **CI had never executed. Not one of 16 runs.** `.github/workflows/ci.yml` had an
   unquoted `DATABASE_URL: sqlite+pysqlite:///:memory:`. The trailing colon of `:memory:`
   makes that a YAML syntax error, so GitHub failed each run at startup with **zero jobs

@@ -39,6 +39,38 @@ from app.security.auth import ensure_admin_user
 log = logging.getLogger(__name__)
 
 
+#: The first-start banner carrying the generated administrator password.
+#:
+#: NOTE THE ABSENT COLONS after "email" and "password". They are missing on
+#: purpose. The log redaction filter strips the value out of any
+#: ``password:`` or ``password=`` pair -- correctly, everywhere else -- so
+#: writing this banner the tidy way replaces the generated password with
+#: ``<REDACTED>`` in the one message whose entire purpose is to display it, on
+#: the one occasion it is ever displayed. The password is stored nowhere and
+#: cannot be recovered, so that mistake locks the operator out of a fresh
+#: install.
+#:
+#: A module constant rather than an inline string so a test can render it
+#: through the real filter:
+#: ``tests/test_logging_redaction.py::test_the_administrator_banner_survives_redaction``
+#: fails if a colon comes back.
+ADMIN_BANNER = (
+    "\n"
+    "==============================================================\n"
+    "  ADMINISTRATOR ACCOUNT CREATED\n"
+    "==============================================================\n"
+    "  Sign in at %s\n"
+    "\n"
+    "    email      %s\n"
+    "    password   %s\n"
+    "\n"
+    "  WRITE THIS DOWN NOW. It is not stored anywhere and cannot\n"
+    "  be recovered. Change it after signing in, and switch on\n"
+    "  two-factor authentication.\n"
+    "=============================================================="
+)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ANN201
     """Start up in the order described in the module docstring, and shut down cleanly."""
@@ -80,21 +112,7 @@ async def lifespan(app: FastAPI):  # noqa: ANN201
             # Printed once, never stored in plaintext, never recoverable. The
             # operator must write it down now -- which is the correct trade for
             # not keeping a plaintext password anywhere.
-            log.warning(
-                "\n"
-                "==============================================================\n"
-                "  ADMINISTRATOR ACCOUNT CREATED\n"
-                "==============================================================\n"
-                "  Sign in at %s\n"
-                "    email    : %s\n"
-                "    password : %s\n"
-                "\n"
-                "  WRITE THIS DOWN NOW. It is not stored anywhere and cannot\n"
-                "  be recovered. Change it after signing in, and switch on\n"
-                "  two-factor authentication.\n"
-                "==============================================================",
-                settings.base_url, admin_email, generated,
-            )
+            log.warning(ADMIN_BANNER, settings.base_url, admin_email, generated)
 
     scheduler.start()
 

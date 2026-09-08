@@ -268,22 +268,45 @@ class RedactingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
-        if isinstance(record.msg, str):
-            record.msg = redact(record.msg)
+        # Interpolate FIRST, redact the finished line, then drop the arguments.
+        #
+        # WHY IN THIS ORDER, AND NOT SEPARATELY
+        # =====================================
+        # Redacting the template and the arguments independently looks
+        # equivalent to this and is not. The "names itself a secret" rule in
+        # _REDACT_PATTERNS matches `password : %s` and replaces the *value*
+        # part -- which in a template is the format placeholder itself. So the
+        # template came out of redaction one `%s` short while record.args still
+        # held every argument, and the record then died inside the handler with
+        # "not all arguments converted during string formatting".
+        #
+        # That failure inverted the whole point of this filter. Python's logging
+        # error path prints the unformatted `Message:` and then `Arguments:`,
+        # and the arguments tuple still contained the raw secret -- so the
+        # message was destroyed AND the secret was printed. Twice as bad as not
+        # redacting at all.
+        #
+        # It also silently broke the single most important log line on a new
+        # install: the banner carrying the generated administrator password,
+        # which is emitted exactly once, is stored nowhere, and cannot be
+        # recovered. Observed on the first real deployment.
+        #
+        # Interpolating first means the patterns see real values instead of
+        # placeholders. Format specifiers keep working -- `%d` included, which a
+        # previous version of this method broke by calling str() on every
+        # argument -- and a secret is caught wherever it came from, the template
+        # or an argument, because by then there is only one string.
+        try:
+            rendered = record.getMessage()
+        except Exception:
+            # A broken format string is the caller's bug and will surface in the
+            # handler either way. Redact what can be redacted rather than
+            # letting this filter become a second, deeper failure inside
+            # logging -- the place where a failure is hardest to see.
+            if isinstance(record.msg, str):
+                record.msg = redact(record.msg)
+            return True
 
-        if record.args:
-            # Only strings are redacted. An earlier version of this method
-            # called str() on every argument, which turned integers into
-            # strings and made every "%d" format specifier in the codebase
-            # raise TypeError at log time -- so the logging that was supposed to
-            # be protected stopped working entirely. Non-string arguments
-            # cannot carry a secret anyway.
-            if isinstance(record.args, dict):
-                record.args = {
-                    k: (redact(v) if isinstance(v, str) else v) for k, v in record.args.items()
-                }
-            else:
-                record.args = tuple(
-                    redact(a) if isinstance(a, str) else a for a in record.args
-                )
+        record.msg = redact(rendered)
+        record.args = ()
         return True
