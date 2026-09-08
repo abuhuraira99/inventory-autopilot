@@ -63,6 +63,27 @@ ruff and mypy all passed over; one was a gate that had never once run.
   one path the operator actually wants. mypy caught it; a test should have. It has one
   now, covering the count and the newest-file detail.
 
+- **Practice mode could never fetch the Amazon catalogue, so practice mode could never
+  demonstrate anything.** Writes are intercepted by HTTP verb — POST, PUT, PATCH, DELETE.
+  That is the right fail-safe default and it swallowed `createReport`, which is a POST
+  only because it carries a body and which changes nothing on the seller account: it asks
+  Amazon to describe the account back to us. Intercepted, it returned the synthetic
+  `{"dryRun": true, "status": "ACCEPTED"}` with no `reportId`, so every catalogue refresh
+  failed, the Amazon half of the database stayed empty, the dashboard showed *Not measured
+  yet*, and every run truthfully reported *nothing to change* — because with one side of
+  the comparison missing there was nothing else it could say.
+  This is worse than a broken button. The client is told to start in practice mode and
+  stay there until they trust the system, and trust cannot be built in a mode where the
+  comparison never happens. Three refreshes failed on the first deployment before the
+  reason was visible at all.
+  `READ_ONLY_WRITE_OPERATIONS` now names the operations that use a write verb and change
+  nothing, and only those bypass the interception. `allow_write=True` is still required
+  from the caller and the price guard still inspects every body; the only thing that
+  changes is whether the request is actually sent while in practice mode. A test asserts
+  that a quantity patch and a feed upload are still blocked, and another asserts that
+  nothing under `listings.` or `feeds.` can ever join the list — the one place practice
+  mode could be weakened, guarded by a test rather than by a comment.
+
 - **The vendor connection could not verify the vendor's certificate, because the
   application had two different trust stores.** Amazon worked on the first attempt; FTPS
   failed every time with `CERTIFICATE_VERIFY_FAILED — unable to get local issuer

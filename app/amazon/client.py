@@ -217,6 +217,45 @@ _HTTP2_AVAILABLE = _http2_available()
 MAX_ATTEMPTS = 5
 
 
+#: Operations that use a write verb but change NOTHING on the seller's account,
+#: and so must still reach Amazon in practice mode.
+#:
+#: WHY THIS EXISTS
+#: ===============
+#: Practice mode intercepts writes by HTTP verb: POST, PUT, PATCH and DELETE.
+#: That is the right default -- it is fail-safe, and it cannot be defeated by
+#: forgetting to label a new operation.
+#:
+#: It also made practice mode useless. Asking Amazon to build the All Listings
+#: Report is ``POST /reports/2021-06-30/reports``, because the request carries a
+#: body, and it does not alter a single thing on the account: it asks Amazon to
+#: describe the account back to us. Intercepted, it returned the synthetic
+#: ``{"dryRun": true, "status": "ACCEPTED"}`` with no reportId, so every
+#: catalogue refresh failed, so the Amazon side of the database stayed empty,
+#: so nothing could ever be matched or compared. The dashboard said "Not
+#: measured yet" and every run honestly reported "nothing to change".
+#:
+#: The client is told to start in practice mode and stay there until they trust
+#: the system. They cannot build that trust in a mode where the comparison never
+#: happens. Observed on the first real deployment: three failed refreshes, and
+#: the reason only became visible once the dashboard started printing the body
+#: of its own alerts.
+#:
+#: THE RULE FOR ADDING TO THIS SET
+#: ==============================
+#: An operation belongs here only if a successful call leaves the seller's
+#: listings, prices, quantities and account settings exactly as they were. If
+#: there is any doubt, it does not belong here. Nothing under ``listings.`` or
+#: ``feeds.`` can ever qualify -- those are the two families that change the
+#: account -- and a test enforces that, so this set cannot quietly grow into a
+#: hole in practice mode.
+#:
+#: Note what is NOT relaxed: ``allow_write=True`` is still required from the
+#: caller, and the price guard still inspects every body. This changes only
+#: whether the request is actually sent while in practice mode.
+READ_ONLY_WRITE_OPERATIONS = frozenset({"reports.create"})
+
+
 class SpApiClient:
     """
     Rate-limited, retrying, price-refusing SP-API client.
@@ -345,7 +384,11 @@ class SpApiClient:
                 decoded = content.decode("utf-8", errors="replace")
             assert_quantity_only(decoded, context=f"{upper} {path} (feed document)")
 
-        if self.dry_run and is_write:
+        # A write verb that changes nothing on the account still has to go to
+        # Amazon in practice mode -- see READ_ONLY_WRITE_OPERATIONS.
+        is_mutation = is_write and operation not in READ_ONLY_WRITE_OPERATIONS
+
+        if self.dry_run and is_mutation:
             record = {
                 "method": upper,
                 "path": path,

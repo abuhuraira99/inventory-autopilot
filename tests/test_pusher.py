@@ -752,3 +752,88 @@ class TestTransport:
         client = _client(handler)
         with pytest.raises(SpApiPermissionError):
             client.get("/listings/2021-08-01/items/A1TESTSELLER/x", operation="listings.get")
+
+
+# ===========================================================================
+# Practice mode has to be able to READ
+# ===========================================================================
+# Practice mode intercepts by HTTP verb, which is the right fail-safe default
+# and made the whole mode useless. Asking Amazon to build the All Listings
+# Report is a POST -- it carries a body -- and it changes nothing on the
+# account. Intercepted, it returned the synthetic dry-run response with no
+# reportId, every catalogue refresh failed, the Amazon side of the database
+# stayed empty, and so every run correctly and uselessly reported "nothing to
+# change". The client is told to start in practice mode and stay there until
+# they trust the system; they cannot build that trust in a mode where the
+# comparison never happens.
+
+
+class TestPracticeModeCanStillAskForAReport:
+    def test_creating_a_report_reaches_amazon_in_practice_mode(self):
+        """
+        The fix. reports.create must go to the network even in practice mode.
+
+        Asserted by looking for the request at the transport, because the
+        synthetic dry-run response is a 200 as well -- a test that only checked
+        the status code would have passed against the broken behaviour.
+        """
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(200, json={"reportId": "report-1"})
+
+        client = _client(handler, dry_run=True)
+        response = client.post(
+            "/reports/2021-06-30/reports",
+            operation="reports.create",
+            json_body={"reportType": "GET_MERCHANT_LISTINGS_ALL_DATA",
+                       "marketplaceIds": ["ATVPDKIKX0DER"]},
+        )
+
+        assert len(calls) == 1, "practice mode swallowed the report request"
+        assert response.json()["reportId"] == "report-1"
+        assert client.dry_run_payloads == [], "a read must not be recorded as a would-be write"
+
+    def test_the_writes_that_matter_are_still_blocked_in_practice_mode(self):
+        """
+        The guarantee that makes the exception above safe to grant.
+
+        A quantity patch and a feed upload are the two ways this system can
+        change the client's account. Neither may reach the network in practice
+        mode, whatever else is relaxed.
+        """
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return _accept_everything(request)
+
+        client = _client(handler, dry_run=True)
+        client.patch(
+            "/listings/2021-08-01/items/A1TESTSELLER/HA-AMS-0008811065126",
+            operation="listings.patch",
+            json_body={"patches": [{"op": "replace", "path": "/attributes/fulfillment_availability",
+                                    "value": [{"quantity": 3}]}]},
+        )
+        client.post("/feeds/2021-06-30/feeds", operation="feeds.create", json_body={"feedType": "x"})
+
+        assert calls == [], "practice mode reached the network with a real write"
+        assert len(client.dry_run_payloads) == 2
+
+    def test_nothing_that_changes_the_account_can_be_added_to_the_allow_list(self):
+        """
+        Structural guard on the exception itself.
+
+        The allow-list is the one place practice mode can be weakened, and it
+        would be weakened by accident rather than on purpose -- somebody adding
+        an operation to fix a symptom. listings.* and feeds.* are precisely the
+        families that alter the client's live account, so they can never
+        qualify, and this test says so rather than relying on a comment being
+        read.
+        """
+        from app.amazon.client import READ_ONLY_WRITE_OPERATIONS
+
+        for operation in READ_ONLY_WRITE_OPERATIONS:
+            assert not operation.startswith("listings."), operation
+            assert not operation.startswith("feeds."), operation
