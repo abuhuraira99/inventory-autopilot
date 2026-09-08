@@ -114,7 +114,15 @@
 }
 .appbar__state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
-.content { padding: 24px; max-width: 1500px; width: 100%; }
+/* Fills the width it is given. There used to be a max-width of 1500px here,
+   a habit borrowed from reading layouts where long lines of prose are hard to
+   follow. This is not prose: it is tiles, tables and comparison figures, and on
+   a normal 1920px screen the cap left roughly 300px of empty background down
+   the right-hand side of every single page while the tables it was supposedly
+   protecting had to scroll inside themselves. min-width: 0 on .main is what
+   keeps a wide table scrolling in its own wrapper rather than stretching the
+   page, so nothing here needs a cap to stay contained. */
+.content { padding: 24px; width: 100%; min-width: 0; }
 
 /* ==========================================================================
    The state strip
