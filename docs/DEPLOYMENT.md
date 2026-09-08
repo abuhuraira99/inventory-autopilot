@@ -613,7 +613,7 @@ Windows equivalents of the shell scripts, in `scripts/`:
 | `scripts/setup-env.ps1` | `scripts/setup-env.sh` | generate keys, ask four questions, write `.env` |
 | `scripts/setup-db.ps1` | *(none — Docker does it)* | create the PostgreSQL role and database |
 | `scripts/deploy.ps1` | `scripts/deploy.sh` | backup → pull → deps → migrate → restart → health check |
-| `scripts/backup.ps1` | the cron snippet in DEPLOYMENT.md | nightly `pg_dump`, zipped, 30-day retention |
+| `scripts/backup.ps1` | the cron snippet in DEPLOYMENT.md | nightly `pg_dump`, zipped, retention set by `-KeepDays` (default 30) |
 
 Decisions inside them worth knowing:
 
