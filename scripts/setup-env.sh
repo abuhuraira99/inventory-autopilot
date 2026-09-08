@@ -110,7 +110,11 @@ ask() {                      # ask <prompt> <example> <varname>
 }
 
 ask "1 of 4  The vendor's FTP address" "ftp.something.com" VENDOR_FTP_HOST
-ask "2 of 4  The vendor's FTP username" "110721B2CFTP" VENDOR_FTP_USER
+# Generic on purpose -- see the matching comment in setup-env.ps1. This was the
+# client's real FTP username, which does not belong in a public repository, and
+# an operator pasting the example instead of their own value connects to
+# somebody else's feed and gets a green connection test for it.
+ask "2 of 4  The vendor's FTP username" "<digits>B2CFTP, from the credentials sheet" VENDOR_FTP_USER
 ask "3 of 4  The Amazon Client ID" "amzn1.application-oa2-client.<32 characters>" LWA_CLIENT_ID
 ask "4 of 4  The Amazon Seller ID (Merchant Token)" "A1B2C3D4E5F6G7" SELLER_ID
 

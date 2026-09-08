@@ -131,7 +131,12 @@ function Read-Required {
 }
 
 $FtpHost  = Read-Required '1 of 4  The vendor''s FTP address'  'ftp.something.com'
-$FtpUser  = Read-Required '2 of 4  The vendor''s FTP username' '110721B2CFTP'
+# The example is deliberately generic. It used to be the client's actual FTP
+# username, which is a real identifier for a real account and had no business
+# being in a public repository -- and worse, an operator who pastes the example
+# instead of the value from their own credentials sheet connects to somebody
+# else's feed and gets a green connection test for it.
+$FtpUser  = Read-Required '2 of 4  The vendor''s FTP username' '<digits>B2CFTP, from the credentials sheet'
 $ClientId = Read-Required '3 of 4  The Amazon Client ID'       'amzn1.application-oa2-client.<32 characters>'
 $SellerId = Read-Required '4 of 4  The Amazon Seller ID (Merchant Token)' 'A1B2C3D4E5F6G7'
 
