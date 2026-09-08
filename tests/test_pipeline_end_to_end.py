@@ -94,11 +94,11 @@ class _FakeVendor:
             )
         ]
 
-    def list_directories(self) -> list[str]:
+    def list_entries(self) -> list[tuple[str, str]]:
         # Part of the VendorClient interface. Never reached in these tests,
         # because list_files always returns a file -- but a fake that does not
         # implement the whole interface stops being a substitute for it.
-        return []
+        return [(self.archive.name, "file")]
 
     def download(self, name: str, destination: Path) -> int:
         self.downloads.append(name)

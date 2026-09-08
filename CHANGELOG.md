@@ -20,19 +20,33 @@ Everything in this group was invisible until the software was installed on a mac
 nobody had installed it on before. Two were defects in code that the whole test suite,
 ruff and mypy all passed over; one was a gate that had never once run.
 
-- **"Connected, but the folder contains no zip files" sent the operator to a setting that
-  does not exist.** The next thing the first deployment hit, immediately after the trust
+- **"Connected, but the folder contains no zip files" gave three different situations the
+  same unhelpful answer.** The next thing the first deployment hit, immediately after the trust
   store above. Everything typed was correct, the login genuinely succeeded, and the
   message said *check the folder path in Settings* — where there has never been a folder
   field, because the folder is `VENDOR_FTP_PATH` in `.env`. A correct connection reported
   as a dead end is worse than an error: there is nothing to search for.
-  The test now asks for the subfolder names when it finds no feeds, and says which file
-  and which key to change, with a worked example using a real subfolder name. If there
-  are no subfolders either, it says *that* instead and points at the vendor, rather than
-  inventing a folder to try. `list_directories()` is on the `VendorClient` protocol and
-  both transports implement it; it is diagnostic only, is asked for solely when the
-  listing is empty, and returns `[]` rather than raising, because a server that will not
-  name its subfolders has still plainly connected.
+  Then the replacement was wrong too, on the same machine within the hour. It reported
+  *subfolders* only, so it could say "no zip files, and no subfolders either" — which
+  sounds conclusive, and is exactly what it would say about a folder holding forty `.csv`
+  files. That would have sent someone to the vendor to ask why a folder full of real data
+  was empty.
+  The test now reports the **whole** directory listing when it finds no feeds, and tells
+  the three situations apart: subfolders present → the feeds are one level down, change
+  `VENDOR_FTP_PATH` in `.env` (named, with a worked example, because there is no folder
+  field on the settings page and never has been); other files present → the folder is
+  *not* empty, here are their names, ask the vendor which one is the stock feed; nothing
+  at all → completely empty, which is a different question for the vendor, about the
+  account and about how long files are kept.
+  `list_entries()` is on the `VendorClient` protocol and both transports implement it. It
+  is diagnostic only, is asked for solely when the listing is empty — a test asserts the
+  happy path never pays for it — falls back from MLSD to NLST like `list_files` does, and
+  returns `[]` rather than raising, because a server that will not enumerate its own
+  directory has still plainly connected.
+- **`test_connection`'s success path had no test at all**, which is how refactoring the
+  branch next to it deleted the whole thing and left the function returning `None` on the
+  one path the operator actually wants. mypy caught it; a test should have. It has one
+  now, covering the count and the newest-file detail.
 
 - **The vendor connection could not verify the vendor's certificate, because the
   application had two different trust stores.** Amazon worked on the first attempt; FTPS

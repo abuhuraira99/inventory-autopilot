@@ -399,7 +399,7 @@ definition the schema the old code expects.
 | `403 Forbidden` on a push | The app is missing the `Product Listing` role. See [AMAZON-APP-SETUP.md](AMAZON-APP-SETUP.md). |
 | `The vendor rejected the login` | Check the username and password. If correct, ask the vendor whether the account is active or IP-restricted. |
 | `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate` on the vendor | Not the vendor. The machine's certificate store is missing a root the vendor chains up to. Fixed in code by trusting the `certifi` bundle — update your checkout. Never work around it by disabling verification. |
-| `Connected … but the folder contains no zip files` | The login worked. The feeds are in a subfolder: the message names them. Set `VENDOR_FTP_PATH` in `.env` — not on the settings page, which has no folder field — then restart. |
+| `Connected … but the folder contains no zip files` | The login worked; read the rest of the message. It names subfolders (set `VENDOR_FTP_PATH` in `.env` — not on the settings page, which has no folder field — then restart), or lists the other files that are there (ask the vendor which is the stock feed), or says *completely empty* (also a question for the vendor). |
 | `could not decrypt credential` | `MASTER_KEY` has changed since the credential was saved. Re-enter it in Settings. |
 | Dashboard loads but the tiles never update | Session expired, or `/api/status` is blocked. Check the browser console. |
 | No runs happening | Paused? `ENABLE_SCHEDULER=false`? Check the footer's "next check" time. |
@@ -578,7 +578,7 @@ GET /         -> 307 to /login  (auth enforced)
 
 with the full header set present — `Content-Security-Policy: default-src 'self'`,
 `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
-`Permissions-Policy`. The 290 tests also run on Windows; the suite is developed there.
+`Permissions-Policy`. The 292 tests also run on Windows; the suite is developed there.
 
 There are no POSIX-only calls in `app/` — no `os.fork`, `pwd`, `grp`, `fcntl`, `resource`,
 `signal.SIGKILL`, and no hardcoded absolute paths. Paths are `pathlib` throughout and

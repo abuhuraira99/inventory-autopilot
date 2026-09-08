@@ -185,7 +185,7 @@ class VendorClient(Protocol):
     def open(self) -> None: ...
     def close(self) -> None: ...
     def list_files(self, *, suffix: str = ".zip") -> list[RemoteFile]: ...
-    def list_directories(self) -> list[str]: ...
+    def list_entries(self) -> list[tuple[str, str]]: ...
     def download(self, name: str, destination: Path) -> int: ...
 
 
@@ -347,32 +347,52 @@ class _FtpsClient(VendorClient):
         log.info("vendor directory listed via NLST: %d matching files", len(out))
         return out
 
-    def list_directories(self) -> list[str]:
+    def list_entries(self) -> list[tuple[str, str]]:
         """
-        The subfolder names in the current directory. Diagnostic only.
+        Everything in the current directory as ``(name, "dir" | "file")``.
 
-        Nothing in a run calls this. It exists so that "connected, but there
-        are no feed files here" can say *where the files probably are* instead
-        of leaving the operator to guess, which is what happened on the first
-        real deployment: the vendor's credentials sheet says the feeds are in
-        the login directory, the login directory turned out to hold only
-        subfolders, and the message pointed at a setting that does not live on
-        the settings page.
+        Diagnostic only -- nothing in a run calls this. It exists so that
+        "connected, but there are no feed files here" can describe what *is*
+        there, which on the first real deployment was the difference between a
+        question the operator could act on and a dead end.
 
-        Returns an empty list rather than raising. A server that will not tell
-        us its subfolders is a worse message, not a failed connection test --
-        the connection plainly worked, or we would not have got this far.
+        WHY IT REPORTS EVERYTHING, NOT JUST THE SUBFOLDERS
+        ==================================================
+        The first version of this listed subfolders only, so its message could
+        say "no zip files, and no subfolders either" -- which sounds conclusive
+        and is not. A folder holding forty ``.csv`` files and no subfolders
+        produces exactly that sentence, and it would have sent the operator to
+        the vendor to ask why the folder was empty when it was not empty at
+        all. An unfiltered listing cannot mislead in that direction.
+
+        Returns an empty list rather than raising. A server that will not
+        enumerate its own directory is a worse message, not a failed
+        connection test -- the connection plainly worked, or we would not have
+        got this far.
         """
         ftp = self._require()
-        names: list[str] = []
+        entries: list[tuple[str, str]] = []
         try:
             for name, facts in ftp.mlsd():
-                if facts.get("type") == "dir" and name not in (".", ".."):
-                    names.append(name)
-        except Exception as exc:  # pragma: no cover - diagnostic path
-            log.info("could not list subfolders (%s); not treating it as a failure", exc)
-            return []
-        return sorted(names)
+                if name in (".", ".."):
+                    continue
+                kind = facts.get("type") or "file"
+                entries.append((name, "dir" if kind == "dir" else "file"))
+        except Exception as exc:
+            # NLST is the fallback for the same reason list_files has one: MLSD
+            # is optional. It gives names without types, so everything is
+            # reported as a file -- less precise, and far better than silence.
+            log.info("MLSD unavailable for the diagnostic listing (%s); trying NLST", exc)
+            try:
+                entries = [
+                    (raw.rsplit("/", 1)[-1], "file")
+                    for raw in ftp.nlst()
+                    if raw.rsplit("/", 1)[-1] not in (".", "..")
+                ]
+            except Exception as exc2:  # pragma: no cover - diagnostic path
+                log.info("could not list the directory at all (%s)", exc2)
+                return []
+        return sorted(entries)
 
     def download(self, name: str, destination: Path) -> int:
         """
@@ -527,21 +547,21 @@ class _SftpClient(VendorClient):
             )
         return out
 
-    def list_directories(self) -> list[str]:
-        """Subfolder names in the current directory. See the FTPS version."""
+    def list_entries(self) -> list[tuple[str, str]]:
+        """Everything in the current directory. See the FTPS version."""
         if self._sftp is None:
             raise VendorConnectionError("not connected")
         import stat
 
-        names: list[str] = []
+        entries: list[tuple[str, str]] = []
         try:
             for attr in self._sftp.listdir_attr("."):
-                if attr.st_mode is not None and stat.S_ISDIR(attr.st_mode):
-                    names.append(attr.filename)
+                is_dir = attr.st_mode is not None and stat.S_ISDIR(attr.st_mode)
+                entries.append((attr.filename, "dir" if is_dir else "file"))
         except Exception as exc:  # pragma: no cover - diagnostic path
-            log.info("could not list subfolders (%s); not treating it as a failure", exc)
+            log.info("could not list the directory (%s)", exc)
             return []
-        return sorted(names)
+        return sorted(entries)
 
     def download(self, name: str, destination: Path) -> int:
         if self._sftp is None:
@@ -564,6 +584,75 @@ class _SftpClient(VendorClient):
 # Connection test, for the settings page
 # ---------------------------------------------------------------------------
 
+def _empty_folder_message(
+    creds: VendorCredentials, entries: list[tuple[str, str]]
+) -> str:
+    """
+    Explain a folder that connected but produced no feed files.
+
+    "Connected, but empty" is the single most confusing result the test button
+    can give: everything the operator typed was correct, the login succeeded,
+    and the screen still says no. There is no error text to search for, so the
+    message has to carry the whole diagnosis itself.
+
+    Three genuinely different situations produce it, and conflating any two of
+    them wastes somebody's afternoon:
+
+      1. subfolders present     -- the feeds are in one of them; change .env
+      2. other files present    -- the folder is NOT empty; the naming or the
+                                   extension is not what we expect, which is a
+                                   precise question for the vendor
+      3. nothing at all         -- genuinely empty; a different question for
+                                   the vendor, about this account and about how
+                                   long files are kept
+
+    The folder is ``VENDOR_FTP_PATH`` in ``.env``, NOT a field on the settings
+    page. An earlier version of this message said "check the folder path in
+    Settings" and sent the operator hunting through a page that has never had
+    one.
+    """
+    here = creds.remote_path or "/"
+    opening = (
+        f"Connected to {creds.host} successfully, and signed in. "
+        f"The folder {here} contains no zip files."
+    )
+
+    dirs = [name for name, kind in entries if kind == "dir"]
+    others = [name for name, kind in entries if kind != "dir"]
+
+    if dirs:
+        listed = ", ".join(dirs[:12])
+        more = f" (and {len(dirs) - 12} more)" if len(dirs) > 12 else ""
+        target = f"{here.rstrip('/')}/{dirs[0]}"
+        return (
+            f"{opening} It does contain these subfolders: {listed}{more}. The feeds are "
+            f"most likely inside one of them, so set VENDOR_FTP_PATH in the .env file to "
+            f"that folder - for example VENDOR_FTP_PATH={target} - then restart and test "
+            f"again."
+        )
+
+    if others:
+        # Deliberately reports the count and real names. "No zip files" on its
+        # own reads as "empty", and a folder full of files that simply are not
+        # named the way we expect is the opposite of empty.
+        listed = ", ".join(others[:8])
+        more = f" (and {len(others) - 8} more)" if len(others) > 8 else ""
+        return (
+            f"{opening} It is not empty though - it holds {len(others)} other "
+            f"file{'s' if len(others) != 1 else ''}: {listed}{more}. So the connection and "
+            f"the folder are both right, and the file names are not what was expected. "
+            f"Send that list to the vendor and ask which of these is the stock feed, and "
+            f"whether the zip files go somewhere else."
+        )
+
+    return (
+        f"{opening} The folder is completely empty - no files of any kind and no "
+        f"subfolders. The connection, the sign-in and the folder are all working, so this "
+        f"is a question for the vendor: should this account see feed files in {here}, and "
+        f"how long are they kept before being removed?"
+    )
+
+
 def test_connection(creds: VendorCredentials) -> tuple[bool, str, list[RemoteFile]]:
     """
     Try to connect and list. Returns ``(ok, human message, files)``.
@@ -577,38 +666,10 @@ def test_connection(creds: VendorCredentials) -> tuple[bool, str, list[RemoteFil
             files = client.list_files()
             # Only asked for when there is nothing to report, so a working
             # connection costs one command rather than two.
-            subfolders = client.list_directories() if not files else []
+            entries = client.list_entries() if not files else []
         if not files:
-            # "Connected, but empty" is the single most confusing result this
-            # button can give: everything the operator typed was correct, and
-            # the screen still says no. So say where the files probably are.
-            #
-            # The folder is VENDOR_FTP_PATH in .env, NOT a field on the
-            # settings page -- the previous wording sent the operator to look
-            # for a setting that does not exist there. Naming the file and the
-            # key is the whole value of this message.
-            here = creds.remote_path or "/"
-            if subfolders:
-                listed = ", ".join(subfolders[:12])
-                more = f" (and {len(subfolders) - 12} more)" if len(subfolders) > 12 else ""
-                where = (
-                    f" It does contain these subfolders: {listed}{more}. The feeds are "
-                    f"most likely inside one of them, so set VENDOR_FTP_PATH in the .env "
-                    f"file to that folder - for example VENDOR_FTP_PATH={here.rstrip('/')}/"
-                    f"{subfolders[0]} - then restart and test again."
-                )
-            else:
-                where = (
-                    " It has no subfolders either, so this is the right kind of empty: "
-                    "ask the vendor whether this account should see files here, and "
-                    "whether they are removed after a while."
-                )
-            return (
-                True,
-                f"Connected to {creds.host} successfully, and signed in. The folder "
-                f"{here} contains no zip files.{where}",
-                [],
-            )
+            return True, _empty_folder_message(creds, entries), []
+
         # Narrowed to a list first so the key function cannot be handed a None
         # timestamp: MLSD is optional and some servers omit it entirely, in
         # which case max() would raise mid-comparison.
