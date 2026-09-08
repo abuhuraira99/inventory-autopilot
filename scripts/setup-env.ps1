@@ -193,6 +193,12 @@ VENDOR_FTP_USER=$FtpUser
 # ftps = explicit TLS on port 21, which is what this vendor provides. Plain
 # 'ftp' would send the password in clear text and the app refuses to start.
 VENDOR_FTP_MODE=ftps
+# The folder holding the feed files. "/" is the login directory, and it is only
+# a starting guess -- on the first real deployment the vendor's own credentials
+# sheet said "/" and the feeds were one level down in a subfolder, which cost
+# three restarts to work out. Do not guess: press "Test the vendor connection"
+# on the settings page. When it finds no feeds it lists what the folder does
+# contain, and names the subfolders to try here.
 VENDOR_FTP_PATH=/
 # Blank on purpose. Typed into the dashboard so it is encrypted at rest.
 VENDOR_FTP_PASSWORD=
