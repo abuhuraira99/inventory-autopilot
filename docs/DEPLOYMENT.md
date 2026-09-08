@@ -711,9 +711,47 @@ Get-NetFirewallRule -Enabled True -Direction Inbound |
   Where-Object { ($_ | Get-NetFirewallPortFilter).LocalPort -eq 8000 }
 ```
 
-**RDP is the real exposure.** Restricting 3389 to a known source address is the single
-highest-value hardening step on a Windows deployment, and it has no Linux counterpart in
-this project because SSH was the only listening service there.
+**RDP is the real exposure.** Restricting the RDP port to a known source address is the
+single highest-value hardening step on a Windows deployment, and it has no Linux
+counterpart in this project because SSH was the only listening service there.
+
+Two things about that, learned on the first real deployment:
+
+**The RDP port may not be 3389.** Providers often move it. Restricting the built-in
+"Remote Desktop - User Mode (TCP-In)" rule then protects a port nothing is listening on,
+while the provider's own rule keeps the real port open — hardening that reads as done and
+is not. Check before trusting it:
+
+```powershell
+(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp').PortNumber
+```
+
+**Account lockout does not protect the `Administrator` account.** Where a source-address
+restriction is not possible — no static IP at either end, which is the normal case when a
+client will operate the server themselves — the usual fallback is:
+
+```powershell
+net accounts /lockoutthreshold:5 /lockoutduration:30 /lockoutwindow:30
+```
+
+That is worth setting, and it is important to know what it does not cover. Microsoft
+documents the built-in Administrator account as *excluded* from the lockout policy by
+design, "to ensure there is no scenario where an administrator cannot sign in to remediate
+an issue". So on a server whose only account is `Administrator`, this command changes
+nothing about brute-force resistance. It cannot lock the operator out either -- which is
+why it is safe to run, and why it is not sufficient on its own.
+
+What actually defends that account, in order of value:
+
+1. A long, unique password. Microsoft names this as the mitigation precisely because
+   lockout is unavailable. Non-negotiable on an internet-facing RDP server holding
+   credentials for a live seller account.
+2. A source-address restriction at the VPS provider's firewall, if the client's office has
+   a fixed address. Better than the Windows firewall rule, because a mistake there is
+   fixable from the provider's console rather than locking everyone out.
+3. A separate named account for day-to-day sign-in, with `Administrator` kept for
+   emergencies. Named accounts *are* covered by the lockout policy, so this is what makes
+   the command above do something.
 
 ---
 
