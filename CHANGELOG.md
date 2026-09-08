@@ -20,6 +20,20 @@ Everything in this group was invisible until the software was installed on a mac
 nobody had installed it on before. Two were defects in code that the whole test suite,
 ruff and mypy all passed over; one was a gate that had never once run.
 
+- **"Connected, but the folder contains no zip files" sent the operator to a setting that
+  does not exist.** The next thing the first deployment hit, immediately after the trust
+  store above. Everything typed was correct, the login genuinely succeeded, and the
+  message said *check the folder path in Settings* — where there has never been a folder
+  field, because the folder is `VENDOR_FTP_PATH` in `.env`. A correct connection reported
+  as a dead end is worse than an error: there is nothing to search for.
+  The test now asks for the subfolder names when it finds no feeds, and says which file
+  and which key to change, with a worked example using a real subfolder name. If there
+  are no subfolders either, it says *that* instead and points at the vendor, rather than
+  inventing a folder to try. `list_directories()` is on the `VendorClient` protocol and
+  both transports implement it; it is diagnostic only, is asked for solely when the
+  listing is empty, and returns `[]` rather than raising, because a server that will not
+  name its subfolders has still plainly connected.
+
 - **The vendor connection could not verify the vendor's certificate, because the
   application had two different trust stores.** Amazon worked on the first attempt; FTPS
   failed every time with `CERTIFICATE_VERIFY_FAILED — unable to get local issuer

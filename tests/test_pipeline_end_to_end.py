@@ -94,6 +94,12 @@ class _FakeVendor:
             )
         ]
 
+    def list_directories(self) -> list[str]:
+        # Part of the VendorClient interface. Never reached in these tests,
+        # because list_files always returns a file -- but a fake that does not
+        # implement the whole interface stops being a substitute for it.
+        return []
+
     def download(self, name: str, destination: Path) -> int:
         self.downloads.append(name)
         destination.parent.mkdir(parents=True, exist_ok=True)

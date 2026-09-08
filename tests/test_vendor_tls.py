@@ -85,3 +85,103 @@ def test_certifi_is_pinned_as_a_direct_dependency() -> None:
     assert any(
         line.strip().startswith("certifi==") for line in requirements.splitlines()
     ), "certifi must be pinned explicitly in requirements.txt"
+
+
+# ---------------------------------------------------------------------------
+# "Connected, but there are no files here"
+# ---------------------------------------------------------------------------
+# The most confusing result the connection-test button can produce: every
+# credential the operator typed was correct, the connection genuinely worked,
+# and the screen still says no. On the first real deployment that message sent
+# the operator looking for a folder setting on the settings page -- where there
+# has never been one, because the folder is VENDOR_FTP_PATH in .env.
+
+
+class _EmptyDirectory:
+    """A vendor server whose login directory holds subfolders and no feeds."""
+
+    def __init__(self, subfolders: list[str]) -> None:
+        self.subfolders = subfolders
+
+    def open(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def list_files(self, *, suffix: str = ".zip") -> list:
+        return []
+
+    def list_directories(self) -> list[str]:
+        return self.subfolders
+
+    def download(self, name: str, destination) -> int:  # pragma: no cover
+        raise AssertionError("a connection test must never download anything")
+
+
+def _test_against(monkeypatch, client) -> tuple[bool, str]:
+    """Run test_connection against a substituted transport."""
+    from contextlib import contextmanager
+
+    from app.vendor import ftp_client
+
+    @contextmanager
+    def fake_connect(_creds):
+        yield client
+
+    monkeypatch.setattr(ftp_client, "connect", fake_connect)
+    creds = ftp_client.VendorCredentials(
+        host="ftp.example.test", port=21, username="u", password="p", remote_path="/"
+    )
+    ok, message, files = ftp_client.test_connection(creds)
+    assert files == []
+    return ok, message
+
+
+def test_an_empty_folder_names_the_subfolders_and_the_env_key(monkeypatch) -> None:
+    """
+    The message must point at where the files actually are.
+
+    The vendor's own credentials sheet said the feeds were in the login
+    directory. They were not -- the login directory held subfolders. Guessing
+    their names is not something the operator should have to do from a dead
+    end, and it is not something they can do from the dashboard at all.
+    """
+    ok, message = _test_against(monkeypatch, _EmptyDirectory(["full", "delta"]))
+
+    assert ok is True                        # the connection worked; say so
+    assert "delta" in message and "full" in message
+    assert "VENDOR_FTP_PATH" in message      # the real key
+    assert ".env" in message                 # the real file
+    assert "in Settings" not in message      # the wrong place, removed
+
+
+def test_a_genuinely_empty_folder_says_so_rather_than_inventing_a_folder(
+    monkeypatch,
+) -> None:
+    """
+    No files and no subfolders is a different answer, and needs the vendor.
+
+    Suggesting a folder here would send the operator round a loop changing
+    .env to values that cannot help.
+    """
+    ok, message = _test_against(monkeypatch, _EmptyDirectory([]))
+
+    assert ok is True
+    assert "no subfolders" in message
+    assert "ask the vendor" in message
+    assert "VENDOR_FTP_PATH" not in message
+
+
+def test_a_connection_test_never_downloads(monkeypatch) -> None:
+    """
+    Guard on the shape of the button, not just its wording.
+
+    ``_EmptyDirectory.download`` raises. A future "helpfully fetch the newest
+    file to check it parses" would turn a two-second diagnostic into a 27 MB
+    transfer that the operator did not ask for, on a link the vendor asked us
+    not to hammer.
+    """
+    ok, _message = _test_against(monkeypatch, _EmptyDirectory(["delta"]))
+
+    assert ok is True

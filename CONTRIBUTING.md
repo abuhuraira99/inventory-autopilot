@@ -11,7 +11,7 @@ things in here that are load-bearing in ways that are not obvious from the code.
 python -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt    # .venv\Scripts\pip on Windows
 
-pytest                # 287 tests, no network, no live database
+pytest                # 290 tests, no network, no live database
 ruff check .          # linting; see the note below about formatting
 mypy                  # configured in pyproject.toml; passes clean
 ```
