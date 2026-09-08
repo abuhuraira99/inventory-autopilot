@@ -63,6 +63,25 @@ ruff and mypy all passed over; one was a gate that had never once run.
   one path the operator actually wants. mypy caught it; a test should have. It has one
   now, covering the count and the newest-file detail.
 
+- **On Windows the application had no log at all, and the catalogue refresh could fail
+  without leaving a single trace anywhere.** Two defects that only became dangerous
+  together. Logging went to stdout only — which under Docker Compose *is* the log, and on
+  a Windows Scheduled Task is discarded by the operating system. And the refresh job
+  caught `ReportError` and alerted on it, so everything else — an expired refresh token
+  (an `SpApiError`), a 403 from a missing role, an unwritable snapshot directory — escaped
+  into APScheduler, which logged it to that same discarded stream and carried on.
+  The result on the live server: four refresh attempts in half an hour, no dashboard
+  alert, no error, no log, nothing to read. Being unable to answer *what did it do?* is
+  worse than most bugs, because it turns every question into a guess — and this system
+  exists so that nobody has to guess about a live seller account.
+  The log now also goes to `data/logs/app.log`, rotating at 5 MB × 5 files, with secrets
+  redacted by the same filter as stdout; failing to open it is tolerated rather than fatal,
+  because refusing to boot over a log file trades a degraded system for no system. The
+  refresh job now catches everything, names the exception class in the alert (`connection
+  refused` reads identically whether it came from Amazon or the local disk), and raises an
+  alert for the previously silent *Amazon is not configured* dead end, telling the operator
+  to press **Test Amazon** to find out which part is missing.
+
 - **Practice mode could never fetch the Amazon catalogue, so practice mode could never
   demonstrate anything.** Writes are intercepted by HTTP verb — POST, PUT, PATCH, DELETE.
   That is the right fail-safe default and it swallowed `createReport`, which is a POST

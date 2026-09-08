@@ -147,7 +147,25 @@ def job_catalog_refresh() -> None:
         with session_scope() as session:
             client = services.amazon_client(session, force_dry_run=True)  # read-only work
             if client is None:
+                # Alerted, not just logged. This is a dead end the operator has
+                # to act on, and pressing the dashboard button and receiving
+                # absolutely nothing back is the worst possible response to it.
                 log.warning("catalogue refresh skipped: Amazon is not configured")
+                notifier.queue(
+                    session,
+                    kind="auth_failure",
+                    severity="warning",
+                    subject="Could not refresh the Amazon catalogue",
+                    body=(
+                        "Amazon is not fully configured, so there was nothing to ask. "
+                        "It needs the Client ID and Seller ID in the .env file, and the "
+                        "Client Secret and Refresh Token saved in Settings under "
+                        "Credentials.\n\n"
+                        "Press 'Test Amazon' on the Settings page to see which part is "
+                        "missing."
+                    ),
+                )
+                notifier.flush_queue(session)
                 return
 
             sync = CatalogSync(status="running")
@@ -158,18 +176,32 @@ def job_catalog_refresh() -> None:
                 records, stats, meta = fetch_all_listings(
                     client, snapshot_dir=settings.backups_dir
                 )
-            except ReportError as exc:
+            except Exception as exc:
+                # DELIBERATELY BROAD. This was `except ReportError`, so a
+                # ReportError produced a clear dashboard alert and anything else
+                # -- an expired refresh token, a 403 from a missing role, a
+                # permissions problem writing the snapshot -- escaped into
+                # APScheduler, which logs it and moves on. On a Windows
+                # Scheduled Task that log went to a discarded stdout, so the
+                # button did nothing, said nothing, and left no trace anywhere.
+                #
+                # The operator's question is always "why did nothing happen?",
+                # and the type of the exception is not what decides whether they
+                # deserve an answer. The class name is included because the
+                # message alone is often not enough to tell an authentication
+                # failure from a disk failure.
                 sync.status = "failed"
-                sync.error = str(exc)
+                sync.error = f"{type(exc).__name__}: {exc}"
                 sync.finished_at = utcnow()
-                log.error("catalogue refresh failed: %s", exc)
+                log.exception("catalogue refresh failed")
+                detail = str(exc) if isinstance(exc, ReportError) else f"{type(exc).__name__}: {exc}"
                 notifier.queue(
                     session,
                     kind="auth_failure",
                     severity="warning",
                     subject="Could not refresh the Amazon catalogue",
                     body=(
-                        f"{exc}\n\n"
+                        f"{detail}\n\n"
                         "The system is still using the previous snapshot, so nothing is "
                         "broken - the figures are just older. It will try again "
                         "tomorrow, or you can retry now from the dashboard."
