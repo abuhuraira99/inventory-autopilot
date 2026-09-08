@@ -398,6 +398,7 @@ definition the schema the old code expects.
 | `Amazon rejected the refresh token (invalid_grant)` | Almost always: the app's roles were changed after the token was made. Re-authorise and save the new token. |
 | `403 Forbidden` on a push | The app is missing the `Product Listing` role. See [AMAZON-APP-SETUP.md](AMAZON-APP-SETUP.md). |
 | `The vendor rejected the login` | Check the username and password. If correct, ask the vendor whether the account is active or IP-restricted. |
+| `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate` on the vendor | Not the vendor. The machine's certificate store is missing a root the vendor chains up to. Fixed in code by trusting the `certifi` bundle — update your checkout. Never work around it by disabling verification. |
 | `could not decrypt credential` | `MASTER_KEY` has changed since the credential was saved. Re-enter it in Settings. |
 | Dashboard loads but the tiles never update | Session expired, or `/api/status` is blocked. Check the browser console. |
 | No runs happening | Paused? `ENABLE_SCHEDULER=false`? Check the footer's "next check" time. |
@@ -523,11 +524,46 @@ install and is not:
 | an error message appears **completely blank** | Python 3.14 colours tracebacks and some of that colour is unreadable on the default console. Set `$env:PYTHON_COLORS='0'` |
 | a paste leaves a `>>` prompt and nothing runs | a quote mark did not survive the paste. Ctrl+C and type it |
 
-**Two code defects were found only by doing this**, both now fixed: `alembic upgrade head`
-could not locate the database outside Docker (`migrations/env.py` never loaded `.env`,
-which also broke `scripts/deploy.ps1`), and a damaged feed archive aborted the whole run
-instead of being quarantined. See [CHANGELOG.md](../CHANGELOG.md). If your checkout
-predates `a9ee8d3`, the migration step will fail with `DATABASE_URL is not set`.
+**The vendor connection test fails on an un-updated Windows machine, and it is not the
+vendor's fault.** Pressing *Test the vendor connection* returns:
+
+```
+The secure connection to ftp.<vendor>.example failed:
+[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed:
+unable to get local issuer certificate (_ssl.c:1082)
+```
+
+while *Test Amazon* succeeds on the first press. The credentials are fine. The vendor's
+certificate is valid and sends a complete chain, measured with
+`openssl s_client -connect ftp.<vendor>.example:21 -starttls ftp -showcerts`:
+
+```
+*.<vendor>.example
+  -> Sectigo Public Server Authentication CA DV R36
+    -> Sectigo Public Server Authentication Root R46      <- created 2021
+      -> USERTrust RSA Certification Authority
+```
+
+A Windows Server 2016 store has never heard of that 2021 root. Windows fetches missing
+roots on demand for *its own* TLS stack, so Chrome on the same machine loads the site
+happily — which makes this look like a vendor outage when it is a stale certificate
+store. Python does not do that fetch; it trusts what is physically in the store.
+
+Fixed in the code rather than on the machine: FTPS now trusts the `certifi` bundle, which
+is what the Amazon half of the system has always used through `httpx`, and which is
+pinned in `requirements.txt` and shipped with the release. Certificate verification and
+the hostname check remain mandatory — turning them off is the tempting one-line fix and
+would accept any interceptor on the client's supply feed, silently. If your checkout
+predates this change, either update it or import the Sectigo R46 root into the machine's
+Trusted Root store; updating is much the better option, because the machine fix has to be
+repeated on every machine and nobody remembers it.
+
+**Three code defects were found only by doing this**, all now fixed: the trust store
+above; `alembic upgrade head` could not locate the database outside Docker
+(`migrations/env.py` never loaded `.env`, which also broke `scripts/deploy.ps1`); and a
+damaged feed archive aborted the whole run instead of being quarantined. See
+[CHANGELOG.md](../CHANGELOG.md). If your checkout predates `a9ee8d3`, the migration step
+will fail with `DATABASE_URL is not set`.
 
 ### What is the same, and what is not
 
@@ -541,7 +577,7 @@ GET /         -> 307 to /login  (auth enforced)
 
 with the full header set present — `Content-Security-Policy: default-src 'self'`,
 `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
-`Permissions-Policy`. The 284 tests also run on Windows; the suite is developed there.
+`Permissions-Policy`. The 287 tests also run on Windows; the suite is developed there.
 
 There are no POSIX-only calls in `app/` — no `os.fork`, `pwd`, `grp`, `fcntl`, `resource`,
 `signal.SIGKILL`, and no hardcoded absolute paths. Paths are `pathlib` throughout and

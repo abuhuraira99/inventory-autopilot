@@ -20,6 +20,30 @@ Everything in this group was invisible until the software was installed on a mac
 nobody had installed it on before. Two were defects in code that the whole test suite,
 ruff and mypy all passed over; one was a gate that had never once run.
 
+- **The vendor connection could not verify the vendor's certificate, because the
+  application had two different trust stores.** Amazon worked on the first attempt; FTPS
+  failed every time with `CERTIFICATE_VERIFY_FAILED — unable to get local issuer
+  certificate`. Nothing was wrong with the vendor, the chain or the credentials: the
+  vendor's certificate is valid and its chain is complete, and it chains up through
+  *Sectigo Public Server Authentication Root R46*, a root created in 2021 that a Windows
+  Server 2016 certificate store has never heard of. Windows fetches missing roots on
+  demand for its own TLS stack, so Chrome on that same machine loaded the site happily
+  while Python refused it — a difference that makes the failure look like a vendor
+  outage.
+  The real defect is that the two halves of the application trusted different things.
+  `httpx` builds its default context from the `certifi` bundle, which is why every Amazon
+  call worked; `app/vendor/ftp_client.py` called `ssl.create_default_context()` with no
+  arguments, which on Windows means "trust whatever happens to be in this machine's
+  store" — a property of the machine rather than of the release. FTPS now uses the same
+  `certifi` roots, so the answer to *is this certificate trusted* is identical on every
+  machine the system is ever installed on, and `certifi` is pinned explicitly in
+  `requirements.txt` because it is now imported by name.
+  **Verification was not weakened to achieve this.** Switching verification off is the
+  tempting one-line fix and would have accepted any interceptor on a live seller
+  account's supply feed, silently, with the button still showing green.
+  `tests/test_vendor_tls.py` asserts the roots are certifi's exactly, that
+  `verify_mode`/`check_hostname` stay mandatory, and that the pin stays direct.
+
 - **The log redaction filter destroyed the message it was protecting, and printed the
   secret anyway.** `RedactingFilter` redacted the format template and the arguments
   separately. The "names itself a secret" pattern matched `password : %s` and replaced the

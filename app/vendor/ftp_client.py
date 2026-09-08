@@ -50,6 +50,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+import certifi
+
 if TYPE_CHECKING:
     # paramiko is imported lazily inside _SftpClient.open so that an install
     # using FTPS -- which is every install today -- never pays for it. The
@@ -190,6 +192,42 @@ class VendorClient(Protocol):
 # FTPS (this vendor)
 # ---------------------------------------------------------------------------
 
+def _tls_context() -> ssl.SSLContext:
+    """
+    The TLS context used for FTPS, trusting the certifi root bundle.
+
+    WHY NOT ``ssl.create_default_context()`` ON ITS OWN
+    ===================================================
+    On Windows, the default context trusts whatever is physically sitting in
+    the machine's certificate store. That store is not a fixed thing: a fresh
+    Windows Server installation ships with a small set of roots and fetches the
+    rest on demand, and that on-demand fetch happens for the Windows TLS stack,
+    not for Python's. So Chrome on the same machine can load a site happily
+    while Python refuses it.
+
+    That is exactly what happened on the first real deployment. The vendor's
+    certificate is valid and its chain is complete, but it chains up through
+    "Sectigo Public Server Authentication Root R46" -- a root created in 2021,
+    absent from a Windows Server 2016 store -- so every FTPS connection died
+    with CERTIFICATE_VERIFY_FAILED / "unable to get local issuer certificate".
+    Nothing was wrong with the vendor, the credentials or the code; the machine
+    simply did not know that root.
+
+    Meanwhile the Amazon half of the system worked first time, because httpx
+    builds *its* default context from certifi rather than from the OS store.
+    Two different trust stores in one application is the actual defect here.
+    This makes both halves trust the same one -- a bundle that is pinned in
+    requirements.txt, versioned with the code, and identical on every machine
+    the system is ever deployed to.
+
+    Verification is NOT weakened. certifi is the Mozilla root programme, the
+    hostname check stays on, and a self-signed or expired certificate still
+    fails loudly -- which remains the correct outcome, and should stay an
+    explicit, documented decision rather than a silent default.
+    """
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 class _FtpsClient(VendorClient):
     """Explicit FTP over TLS, which is what All Media Supply provides."""
 
@@ -207,12 +245,10 @@ class _FtpsClient(VendorClient):
         ftp: ftplib.FTP
         try:
             if self.use_tls:
-                # Default context: verifies the certificate chain and hostname.
-                # If the vendor ever presents a self-signed certificate this
-                # will fail loudly, which is the correct outcome -- it should be
-                # an explicit, documented decision to trust it, not a silent
-                # default.
-                context = ssl.create_default_context()
+                # Verifies the certificate chain and the hostname, against
+                # the certifi roots rather than the machine's own store. See
+                # _tls_context for why that distinction cost a deployment.
+                context = _tls_context()
                 ftp = _ReusingFTP_TLS(context=context, timeout=c.timeout)
                 ftp.connect(host=c.host, port=c.port, timeout=c.timeout)
                 ftp.auth()          # AUTH TLS: upgrade before sending the password

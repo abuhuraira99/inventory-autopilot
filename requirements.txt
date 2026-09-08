@@ -52,6 +52,15 @@ alembic==1.16.5
 # Amazon side of the system, dead, in a way no test noticed because no test
 # built a client. tests/test_pusher.py now builds one on every run.
 httpx[http2]==0.28.1
+# The root certificate bundle, pinned EXPLICITLY even though httpx already
+# pulls it in. app/vendor/ftp_client.py imports it by name to build the FTPS
+# trust store, for the reason written out in _tls_context: the machine's own
+# certificate store is not dependable on Windows, and the first real deployment
+# lost an evening to a vendor root that Windows Server 2016 had never heard of.
+# Same rule as python-dotenv above -- anything imported by name gets its own
+# line. Upgrading this line is how new roots arrive, so review it when a
+# certificate somewhere stops verifying.
+certifi==2026.7.22
 # Retry with exponential backoff and jitter, for Amazon's 429 responses.
 tenacity==9.1.2
 
