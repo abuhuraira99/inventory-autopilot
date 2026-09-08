@@ -9,9 +9,87 @@ not by it failing in production.
 
 ---
 
-## [Unreleased] — 7 September 2026
+## [Unreleased] — 8 September 2026
 
-Pre-deployment audit. Nothing here has run against the live Amazon account yet.
+Pre-deployment audit, then the first real deployment onto the Windows VPS. Nothing here
+has run against the live Amazon account yet.
+
+### Fixed — found by deploying it for real
+
+Everything in this group was invisible until the software was installed on a machine
+nobody had installed it on before. Two were defects in code that the whole test suite,
+ruff and mypy all passed over; one was a gate that had never once run.
+
+- **CI had never executed. Not one of 16 runs.** `.github/workflows/ci.yml` had an
+  unquoted `DATABASE_URL: sqlite+pysqlite:///:memory:`. The trailing colon of `:memory:`
+  makes that a YAML syntax error, so GitHub failed each run at startup with **zero jobs
+  scheduled** — while the README badge showed red and every claim of the form "CI enforces
+  this" was false. Quoting the value exposed the four jobs that were supposed to have been
+  running all along. Fixing it paid for itself within minutes: it immediately caught the
+  next item.
+- **A damaged feed file aborted the whole run instead of being quarantined.**
+  `verify_archive` converted only `zipfile.BadZipFile` into `FeedFormatError`, but
+  `testzip()` signals damage in more ways than that — a structurally broken deflate stream
+  raises `zlib.error`, a corrupted version field raises `NotImplementedError`, a corrupted
+  offset raises `OSError`. Walking a byte flip across every position of a real archive,
+  **75 of 295 corruptions escaped** as something other than `FeedFormatError`, which meant
+  they sailed past the pipeline's per-file quarantine handler and failed the entire run as
+  "failed unexpectedly" with a zlib traceback attached — instead of setting one bad file
+  aside and carrying on. Reproduced on Windows/CPython 3.14, the deployment target, so
+  never a Linux-only artefact. The pre-existing test flipped one byte in the middle and
+  therefore tested whichever failure mode that single position happened to produce: it
+  passed on Windows/3.14 and failed on Linux/3.12 for the same reason a real damaged feed
+  would have, which is luck. Now converted by contract rather than by a list of types,
+  because the list cannot be derived by inspection.
+- **`alembic upgrade head` could not find the database outside Docker.**
+  `migrations/env.py` read `DATABASE_URL` from `os.environ` and nothing loaded `.env`.
+  Under Compose the URL is injected as a real environment variable, so the file worked
+  there and only there. Every native deployment failed at the point where it creates its
+  tables — SETUP.md Step 7 — and `scripts/deploy.ps1` would have failed identically at
+  step 5 of 6 on every future release carrying a migration. Fixed in `env.py` rather than
+  in the two callers, so running alembic by hand works too. Reading the URL from
+  `app.config` instead was rejected: that module has a fallback default, so a missing
+  setting would have quietly migrated a *different* database than intended.
+- **`python-dotenv` is now pinned explicitly.** It was already installed, but only as a
+  transitive dependency of `pydantic-settings`. `migrations/env.py` imports it by name,
+  and this project has been bitten by that exact assumption before — `SpApiClient` could
+  not be constructed at all because httpx's `h2` extra was assumed rather than pinned.
+
+### Changed — CI tests what actually ships
+
+- **The Python jobs now pin 3.14, not 3.12.** Nothing in this project uses 3.12: the
+  Windows VPS runs 3.14.7 and so does development. The gate was proving something true
+  about a version nobody deploys — and the damaged-archive bug above is precisely what
+  that gap looks like, the same code and the same test giving two answers on two
+  interpreters. The Docker job deliberately keeps the Dockerfile's 3.12 base image, since
+  that is a genuinely different deployment target, so both versions this can be deployed
+  on are now exercised. `mypy` and `ruff` stay pinned at the *oldest* supported version
+  on purpose; raising them would silently narrow what the project claims to support.
+
+### Documented — what a Windows Server 2016 deployment actually does
+
+None of these are software faults, and all of them cost real time on the first run. They
+are now written into the deployment guide rather than rediscovered:
+
+- Chocolatey installs .NET Framework 4.8 on Server 2016 and needs a **full machine
+  reboot**, not just a new shell.
+- The PostgreSQL package now **generates a random `postgres` password** and prints it
+  once, rather than using the published default the guide described.
+- Chocolatey sits on `Installing postgresql16...` for 5–15 minutes with no output, and can
+  finish the install without ever reporting it. The service being `Running` is the real
+  signal.
+- The guide told the operator to replace a placeholder password. Run verbatim, it sets the
+  database administrator password to the literal words `PutYourOwnLongPasswordHere`. It
+  now generates one instead.
+- **Free disk was 5.1 GB, not the ~15 GB assumed** — .NET 4.8's backups and the Windows
+  Update cache, not the application. A safe cleanup recovered 5 GB; the heavier DISM
+  component-store cleanup was measured as not worth it (`Reclaimable Packages : 0`).
+- Console mechanics that produce confusing errors: `.\` required to run a script, `>`
+  characters copied out of indented note blocks, Ctrl+V not being paste in this console
+  (fatal at a masked password prompt), `powershell` typed inside PowerShell inheriting a
+  stale `PATH` so a freshly installed git looks absent, and Python 3.14's coloured
+  tracebacks rendering **invisibly** on the default console — an error message that
+  appears blank.
 
 ### Fixed — data loss
 

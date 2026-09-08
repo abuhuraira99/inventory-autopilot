@@ -472,6 +472,63 @@ flip between two answers. To scale the dashboard, run extra instances with
 
 # Part 2 · Windows Server
 
+### Field notes from the first real deployment
+
+This path has now been walked end to end on a fresh Windows Server 2016 VPS (4 GB RAM,
+2 vCPU, 30 GB disk). Read this before you start: none of it is a fault in the
+application, and all of it costs an hour if you meet it cold.
+
+**Reboot after installing Chocolatey.** Server 2016 ships without .NET Framework 4.8, so
+Chocolatey installs it and cannot finish until Windows restarts. It says so, and it means
+the machine, not the shell: `You need to restart this machine prior to using choco`.
+
+**PostgreSQL installs silently for 5–15 minutes, and may never report finishing.**
+Chocolatey sits on `Installing postgresql16...` with a blinking cursor. Do not assume it
+has hung, and do not Ctrl+C on a guess — ask the system instead:
+
+```powershell
+Get-Service postgresql*                        # Running = it is already done
+Get-Process *postgres* | Select Name, Id, CPU   # several processes at low CPU = healthy idle DB
+```
+
+Once the service is `Running`, Chocolatey is only failing to *report*, and Ctrl+C is safe.
+
+**The `postgres` password is now randomly generated and printed once.** Recent versions of
+the package print `WARNING: Generated password: …` rather than using a published default.
+Capture it before the window scrolls. Then replace it with one you generated — and
+generate it, rather than pasting a placeholder out of a document, which is a mistake that
+runs perfectly happily and leaves the database administrator password set to a phrase
+printed in a guide.
+
+**Budget disk space properly.** A 30 GB disk left **5.1 GB** free once Windows, .NET 4.8,
+PostgreSQL, Python and git were on it — against a plan that assumed about 15 GB. The
+consumer is not the application: .NET 4.8 keeps a full backup of every file it replaced,
+and Windows Update hoards its downloads. Clearing the update cache, the temp folders and
+the recycle bin recovered **5 GB** in seconds and needed no reboot. The heavier DISM
+component-store cleanup was measured and rejected — `AnalyzeComponentStore` reported
+`Number of Reclaimable Packages : 0`, so it would have freed under a gigabyte in exchange
+for permanently losing the ability to uninstall a Windows update. Check that number before
+spending 30 minutes on it. This system needs 3–5 GB in normal operation and warns below
+2 GB free; a full disk stops the sync *quietly*, so do not run it near the edge.
+
+**Console mechanics that generate misleading errors.** Each of these looks like a broken
+install and is not:
+
+| Symptom | Cause |
+|---|---|
+| `is not recognized as the name of a cmdlet` on a script | missing `.\` prefix — PowerShell will not run a script from the current folder implicitly |
+| `The ampersand (&) character is not allowed` | `>` characters copied out of an indented Markdown note block |
+| a masked password prompt accepts one asterisk, then `authentication failed` | Ctrl+V is not paste in this console. **Right-click** is |
+| a freshly installed `git` reports "not recognized" | the shell was started before the install, or `powershell` was typed *inside* PowerShell, inheriting a stale `PATH`. Close the window; do not reinstall |
+| an error message appears **completely blank** | Python 3.14 colours tracebacks and some of that colour is unreadable on the default console. Set `$env:PYTHON_COLORS='0'` |
+| a paste leaves a `>>` prompt and nothing runs | a quote mark did not survive the paste. Ctrl+C and type it |
+
+**Two code defects were found only by doing this**, both now fixed: `alembic upgrade head`
+could not locate the database outside Docker (`migrations/env.py` never loaded `.env`,
+which also broke `scripts/deploy.ps1`), and a damaged feed archive aborted the whole run
+instead of being quarantined. See [CHANGELOG.md](../CHANGELOG.md). If your checkout
+predates `a9ee8d3`, the migration step will fail with `DATABASE_URL is not set`.
+
 ### What is the same, and what is not
 
 The **application** is unchanged and needs no Windows-specific code. Verified directly:
@@ -484,7 +541,7 @@ GET /         -> 307 to /login  (auth enforced)
 
 with the full header set present — `Content-Security-Policy: default-src 'self'`,
 `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
-`Permissions-Policy`. The 255 tests also run on Windows; the suite is developed there.
+`Permissions-Policy`. The 273 tests also run on Windows; the suite is developed there.
 
 There are no POSIX-only calls in `app/` — no `os.fork`, `pwd`, `grp`, `fcntl`, `resource`,
 `signal.SIGKILL`, and no hardcoded absolute paths. Paths are `pathlib` throughout and
