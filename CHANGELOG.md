@@ -63,6 +63,22 @@ ruff and mypy all passed over; one was a gate that had never once run.
   one path the operator actually wants. mypy caught it; a test should have. It has one
   now, covering the count and the newest-file detail.
 
+- **Every catalogue refresh against the real Amazon account crashed, on a line that had
+  never once executed.** `parse_listings_report` attached the fulfillment channel to each
+  parsed row with `setattr(record, "_fulfillment_channel", channel)`. `ListingRecord` is a
+  `@dataclass(slots=True)`, so it has no `__dict__` and refuses any attribute it did not
+  declare — `AttributeError: 'ListingRecord' object has no attribute
+  '_fulfillment_channel' and no __dict__ for setting new attributes`.
+  The line sat behind `if channel:`, and the sample report the parser was developed
+  against has no fulfillment-channel column, so the branch was never entered. Written,
+  linted, type-checked, reviewed and shipped without ever running. The live account's
+  report does carry the column.
+  `fulfillment_channel` is a declared field now, set at construction and read straight off
+  the record. `tests/test_catalogue_report.py` parses a report **with** the column and one
+  **without** — the pair is the point, since either alone is what let this through — and
+  asserts the class still refuses unknown attributes, so the same trick cannot be retried
+  under a different name.
+
 - **On Windows the application had no log at all, and the catalogue refresh could fail
   without leaving a single trace anywhere.** Two defects that only became dangerous
   together. Logging went to stdout only — which under Docker Compose *is* the log, and on

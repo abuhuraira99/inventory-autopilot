@@ -247,10 +247,13 @@ def job_catalog_refresh() -> None:
                 row.quantity = rec.quantity
                 row.price = rec.price
                 row.status = rec.status
-                # This account's report has no fulfillment-channel column; the
-                # client confirmed everything is merchant-fulfilled. The value
-                # is corrected per SKU whenever a listing is read individually.
-                row.fulfillment_channel = getattr(rec, "_fulfillment_channel", None) or (
+                # The sample report this was built against had no
+                # fulfillment-channel column and the client confirmed everything
+                # is merchant-fulfilled, so DEFAULT is the fallback. The live
+                # report does carry the column, which is how the smuggled
+                # attribute this used to read was finally found to be
+                # unassignable. Read straight off the record now.
+                row.fulfillment_channel = rec.fulfillment_channel or (
                     row.fulfillment_channel or "DEFAULT"
                 )
                 row.blacklisted = rec.seller_sku in set(cfg.get("blacklisted_skus") or [])

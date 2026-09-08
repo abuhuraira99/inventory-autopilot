@@ -109,6 +109,17 @@ class ListingRecord:
     quantity: int | None
     price: float | None
     status: str | None
+    #: "AMAZON_NA" for FBA, "DEFAULT" for merchant-fulfilled, None when the
+    #: report has no such column.
+    #:
+    #: A DECLARED FIELD, NOT AN ATTRIBUTE ADDED LATER. This value used to be
+    #: attached to the record after construction with setattr(), which cannot
+    #: work: the class is a slots dataclass, so it has no __dict__ and rejects
+    #: any attribute it did not declare. Every catalogue refresh against a
+    #: report that actually carried the column died with AttributeError, and
+    #: the report the parser was developed against did not carry one -- so the
+    #: line was written, linted, type-checked, shipped, and had never once run.
+    fulfillment_channel: str | None = None
 
     @property
     def is_active(self) -> bool:
@@ -389,17 +400,13 @@ def parse_listings_report(text: str) -> tuple[list[ListingRecord], ReportParseSt
                 quantity=quantity,
                 price=price,
                 status=status,
+                fulfillment_channel=channel or None,
             )
         )
         stats.parsed_rows += 1
         stats.by_prefix[prefix] = stats.by_prefix.get(prefix, 0) + 1
         key = status or "(none)"
         stats.by_status[key] = stats.by_status.get(key, 0) + 1
-
-        # Channel is recorded on the model by the caller; kept here so the
-        # column is used when an account does provide it.
-        if channel:
-            setattr(records[-1], "_fulfillment_channel", channel)  # noqa: B010
 
     log.info(
         "parsed catalogue report: %d rows, %d prefixes, statuses %s",
