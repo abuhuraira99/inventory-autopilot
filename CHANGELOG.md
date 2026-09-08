@@ -43,6 +43,21 @@ ruff and mypy all passed over; one was a gate that had never once run.
   happy path never pays for it — falls back from MLSD to NLST like `list_files` does, and
   returns `[]` rather than raising, because a server that will not enumerate its own
   directory has still plainly connected.
+- **An unlabelled directory entry was reported as a file, so two folders became "it holds
+  2 other files: Bib, Invent".** Third wrong answer from the same button, and the advice
+  attached to it was to ask the vendor which of those two *files* was the stock feed. They
+  are directories. `MLSD` is not obliged to supply a `type` fact and the `NLST` fallback
+  supplies nothing at all, so the code's `facts.get("type") or "file"` turned *unknown*
+  into *file* — the same mistake as the two before it: reporting a partial view as if it
+  were the whole truth.
+  Unlabelled now means unknown, and unknown gets checked by trying to `CWD` into the entry
+  and changing straight back — the one test that works on every FTP server whatever it
+  supports, and read-only. It runs only when the listing had no feed files, so a working
+  connection pays nothing; it is capped at 25 entries, because a vendor who asked to be
+  polled gently should not receive eighteen hundred commands from one button press; and if
+  the step back ever fails it stops rather than measuring the next entry from the wrong
+  directory, leaving the rest reported as files, because this method must never *claim* a
+  folder it has not confirmed.
 - **`test_connection`'s success path had no test at all**, which is how refactoring the
   branch next to it deleted the whole thing and left the function returning `None` on the
   one path the operator actually wants. mypy caught it; a test should have. It has one

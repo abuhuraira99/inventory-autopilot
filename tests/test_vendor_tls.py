@@ -280,3 +280,132 @@ def test_the_happy_path_reports_the_count_and_the_newest_file(monkeypatch) -> No
     assert ok is True
     assert "Found 2 files" in message
     assert "The newest is FEED_20260908_02.zip." in message
+
+
+# ---------------------------------------------------------------------------
+# Working out what an unlabelled directory entry actually is
+# ---------------------------------------------------------------------------
+# The real server returned "Bib" and "Invent" with no type information, and the
+# code defaulted them to files -- producing "it holds 2 other files: Bib,
+# Invent" and the advice to ask the vendor which of those files was the stock
+# feed. They were folders. MLSD does not have to supply a type and NLST never
+# does, so unlabelled means unknown, and unknown gets checked.
+
+
+class _StubFtp:
+    """Enough of ftplib.FTP to exercise the type probe. Records every call."""
+
+    def __init__(self, dirs: set[str], *, cwd_back_fails: bool = False) -> None:
+        self.dirs = dirs
+        self.cwd_back_fails = cwd_back_fails
+        self.here = "/"
+        self.calls: list[str] = []
+
+    def pwd(self) -> str:
+        return self.here
+
+    def cwd(self, path: str) -> None:
+        self.calls.append(path)
+        if path == self.here:
+            if self.cwd_back_fails:
+                raise OSError("connection reset")
+            return
+        if path not in self.dirs:
+            raise Exception("550 Not a directory")
+
+
+def _client_with(stub: _StubFtp):
+    from app.vendor.ftp_client import VendorCredentials, _FtpsClient
+
+    client = _FtpsClient(
+        VendorCredentials(host="h", port=21, username="u", password="p")
+    )
+    client._ftp = stub  # type: ignore[assignment]
+    return client
+
+
+def test_an_unlabelled_entry_that_can_be_entered_is_a_folder() -> None:
+    """
+    The exact case from the real server: two folders, no type information.
+
+    Trying to change into it and back is the one test that works on every FTP
+    server whatever it supports, and it is read-only.
+    """
+    stub = _StubFtp(dirs={"Bib", "Invent"})
+    client = _client_with(stub)
+
+    resolved = client._resolve_unknown_kinds(
+        [("Bib", "unknown"), ("Invent", "unknown"), ("notes.txt", "unknown")]
+    )
+
+    assert dict(resolved) == {"Bib": "dir", "Invent": "dir", "notes.txt": "file"}
+
+
+def test_the_probe_always_returns_to_the_directory_it_started_in() -> None:
+    """
+    Leaving the connection somewhere else would silently corrupt the listing.
+
+    Every successful step into a folder must be followed by a step back, or the
+    next probe measures the wrong directory and the whole answer is quietly
+    wrong -- which is the failure this method exists to stop making.
+    """
+    stub = _StubFtp(dirs={"Bib", "Invent"})
+    client = _client_with(stub)
+
+    client._resolve_unknown_kinds([("Bib", "unknown"), ("Invent", "unknown")])
+
+    assert stub.calls == ["Bib", "/", "Invent", "/"]
+
+
+def test_the_probe_stops_rather_than_reporting_from_the_wrong_directory() -> None:
+    """
+    If the step back fails, stop. Do not carry on measuring from elsewhere.
+
+    Everything not yet probed falls back to "file", which is honest: it is
+    unknown, and this method promises never to *claim* a folder it has not
+    confirmed.
+    """
+    stub = _StubFtp(dirs={"Bib", "Invent"}, cwd_back_fails=True)
+    client = _client_with(stub)
+
+    resolved = dict(
+        client._resolve_unknown_kinds([("Bib", "unknown"), ("Invent", "unknown")])
+    )
+
+    assert resolved["Bib"] == "dir"      # confirmed before the failure
+    assert resolved["Invent"] == "file"  # never probed, so not claimed
+    assert stub.calls == ["Bib", "/"]    # and it stopped
+
+
+def test_types_the_server_did_state_are_never_probed() -> None:
+    """
+    A server that answered the question is not asked it again.
+
+    Probing costs two commands per entry against a vendor who asked to be
+    polled gently.
+    """
+    stub = _StubFtp(dirs={"delta"})
+    client = _client_with(stub)
+
+    resolved = client._resolve_unknown_kinds([("delta", "dir"), ("a.csv", "file")])
+
+    assert dict(resolved) == {"delta": "dir", "a.csv": "file"}
+    assert stub.calls == []
+
+
+def test_probing_is_capped() -> None:
+    """
+    A folder of hundreds of unlabelled entries must not become a flood.
+
+    Past the cap the answer is already clear from what was probed.
+    """
+    from app.vendor.ftp_client import _FtpsClient
+
+    stub = _StubFtp(dirs=set())
+    client = _client_with(stub)
+    many = [(f"entry{i}", "unknown") for i in range(_FtpsClient.PROBE_LIMIT + 40)]
+
+    resolved = client._resolve_unknown_kinds(many)
+
+    assert len(stub.calls) == _FtpsClient.PROBE_LIMIT
+    assert all(kind == "file" for _name, kind in resolved)

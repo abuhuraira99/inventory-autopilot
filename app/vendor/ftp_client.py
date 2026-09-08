@@ -232,6 +232,10 @@ def _tls_context() -> ssl.SSLContext:
 class _FtpsClient(VendorClient):
     """Explicit FTP over TLS, which is what All Media Supply provides."""
 
+    #: How many unlabelled directory entries list_entries will probe. See
+    #: _resolve_unknown_kinds for why it is capped at all.
+    PROBE_LIMIT = 25
+
     def __init__(self, creds: VendorCredentials, *, use_tls: bool = True) -> None:
         self.creds = creds
         self.use_tls = use_tls
@@ -358,12 +362,27 @@ class _FtpsClient(VendorClient):
 
         WHY IT REPORTS EVERYTHING, NOT JUST THE SUBFOLDERS
         ==================================================
-        The first version of this listed subfolders only, so its message could
-        say "no zip files, and no subfolders either" -- which sounds conclusive
-        and is not. A folder holding forty ``.csv`` files and no subfolders
-        produces exactly that sentence, and it would have sent the operator to
-        the vendor to ask why the folder was empty when it was not empty at
-        all. An unfiltered listing cannot mislead in that direction.
+        The first version listed subfolders only, so its message could say "no
+        zip files, and no subfolders either" -- which sounds conclusive and is
+        not. A folder holding forty ``.csv`` files and no subfolders produces
+        exactly that sentence. An unfiltered listing cannot mislead that way.
+
+        WHY THE TYPE IS PROBED RATHER THAN TRUSTED
+        ==========================================
+        The second version trusted the listing's own type field and defaulted
+        anything unlabelled to "file". On the real server that turned two
+        folders into "it holds 2 other files: Bib, Invent" -- and "ask the
+        vendor which of these files is the stock feed" is a slightly
+        embarrassing question to send about two directories. ``MLSD`` need not
+        supply ``type``, and the ``NLST`` fallback supplies nothing at all, so
+        an unlabelled entry means *unknown*, never *file*.
+
+        Unknown entries are resolved by trying to ``CWD`` into them and
+        changing straight back, which is the one test that works on every FTP
+        server regardless of what it supports. It is read-only, it costs two
+        commands per unknown entry, and it only ever runs when the operator has
+        pressed the test button and there was nothing to report -- so the
+        happy path pays nothing, and the confusing path gets a real answer.
 
         Returns an empty list rather than raising. A server that will not
         enumerate its own directory is a worse message, not a failed
@@ -376,23 +395,77 @@ class _FtpsClient(VendorClient):
             for name, facts in ftp.mlsd():
                 if name in (".", ".."):
                     continue
-                kind = facts.get("type") or "file"
-                entries.append((name, "dir" if kind == "dir" else "file"))
+                declared = facts.get("type")
+                if declared == "dir":
+                    kind = "dir"
+                elif declared == "file":
+                    kind = "file"
+                else:
+                    kind = "unknown"
+                entries.append((name, kind))
         except Exception as exc:
-            # NLST is the fallback for the same reason list_files has one: MLSD
-            # is optional. It gives names without types, so everything is
-            # reported as a file -- less precise, and far better than silence.
+            # NLST is the fallback for the same reason list_files has one:
+            # MLSD is optional. It gives bare names and no types at all, so
+            # every entry starts out unknown and gets probed below.
             log.info("MLSD unavailable for the diagnostic listing (%s); trying NLST", exc)
             try:
                 entries = [
-                    (raw.rsplit("/", 1)[-1], "file")
+                    (raw.rsplit("/", 1)[-1], "unknown")
                     for raw in ftp.nlst()
                     if raw.rsplit("/", 1)[-1] not in (".", "..")
                 ]
             except Exception as exc2:  # pragma: no cover - diagnostic path
                 log.info("could not list the directory at all (%s)", exc2)
                 return []
-        return sorted(entries)
+
+        return sorted(self._resolve_unknown_kinds(entries))
+
+    def _resolve_unknown_kinds(
+        self, entries: list[tuple[str, str]]
+    ) -> list[tuple[str, str]]:
+        """
+        Decide "dir" or "file" for entries the server did not label.
+
+        Capped at PROBE_LIMIT. Past that the answer is already obvious from the
+        ones that were probed, and a folder of nine hundred unlabelled entries
+        should not turn a button press into eighteen hundred commands against a
+        vendor who asked to be polled gently. Anything left over is reported as
+        a file, which is what an unlabelled entry in a large listing almost
+        always is.
+        """
+        ftp = self._require()
+        unknown = [name for name, kind in entries if kind == "unknown"]
+        if not unknown:
+            return entries
+
+        try:
+            origin = ftp.pwd()
+        except Exception as exc:  # pragma: no cover - diagnostic path
+            log.info("cannot read the working directory (%s); not probing types", exc)
+            return [(name, "file" if kind == "unknown" else kind) for name, kind in entries]
+
+        resolved: dict[str, str] = {}
+        for name in unknown[: self.PROBE_LIMIT]:
+            try:
+                ftp.cwd(name)
+            except Exception:
+                resolved[name] = "file"
+                continue
+            resolved[name] = "dir"
+            try:
+                ftp.cwd(origin)
+            except Exception as exc:  # pragma: no cover - diagnostic path
+                # Left somewhere else on the server. Stop probing rather than
+                # report types measured from the wrong directory, and say so:
+                # a silently wrong listing is what this whole method exists to
+                # stop producing.
+                log.warning("could not return to %s after probing %s (%s)", origin, name, exc)
+                break
+
+        return [
+            (name, resolved.get(name, "file") if kind == "unknown" else kind)
+            for name, kind in entries
+        ]
 
     def download(self, name: str, destination: Path) -> int:
         """
