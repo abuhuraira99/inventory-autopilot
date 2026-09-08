@@ -264,3 +264,39 @@ def test_downgrading_the_baseline_works_with_the_opt_in(monkeypatch):
 
     assert inspect(engine).get_table_names() == []
     engine.dispose()
+
+
+def test_the_alembic_environment_loads_dotenv():
+    """
+    ``migrations/env.py`` must load ``.env``, or no native deployment can migrate.
+
+    Reading the URL from the environment is correct and deliberate: a connection
+    string holds a password, and ``alembic.ini`` is committed. But under Docker
+    Compose the URL arrives as a real environment variable, so this file worked
+    there and ONLY there. Run ``alembic upgrade head`` directly -- which is what
+    SETUP.md Step 7 tells an operator to do, and what ``scripts/deploy.ps1``
+    does at step 5 of 6 -- and DATABASE_URL was simply absent. First-time setup
+    could not create its tables, and every later release carrying a migration
+    would have stopped at the same line.
+
+    Asserted against the source rather than end to end, deliberately. Proving it
+    properly means writing a ``.env`` into the repository root, and
+    ``app/config.py`` reads that same path relative to the working directory --
+    so the fixture would leak into unrelated tests depending on ordering. The
+    regression this guards is the line being deleted as redundant, and that is
+    visible in the source.
+    """
+    env_py = pathlib.Path(__file__).resolve().parent.parent / "migrations" / "env.py"
+    source = env_py.read_text(encoding="utf-8")
+
+    assert "load_dotenv" in source, (
+        "migrations/env.py no longer loads .env. Under Docker the URL is injected "
+        "as an environment variable, so this looks harmless there -- but a native "
+        "deployment (SETUP.md Step 7, scripts/deploy.ps1) has nothing else to read "
+        "DATABASE_URL from, and every migration fails with 'DATABASE_URL is not set'."
+    )
+    assert 'os.environ.get("DATABASE_URL")' in source, (
+        "the URL must still be required from the environment. Reading it from "
+        "app.config instead would pick up that module's fallback default and "
+        "quietly migrate a DIFFERENT database than the operator intended."
+    )

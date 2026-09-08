@@ -3,9 +3,10 @@ Alembic environment.
 
 Two decisions worth knowing about:
 
-  1. **The database URL comes from the environment**, never from alembic.ini.
-     The connection string contains a password, and a file that gets committed
-     is the wrong place for one.
+  1. **The database URL comes from the environment, or from .env**, never from
+     alembic.ini. The connection string contains a password, and a file that
+     gets committed is the wrong place for one. A real environment variable
+     wins over .env, which is what keeps Docker Compose authoritative there.
 
   2. **``compare_type`` and ``compare_server_default`` are on.** Without them,
      autogenerate silently misses a column changing from ``Integer`` to
@@ -21,10 +22,30 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 # Make the application importable, so the models can be the source of truth.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+
+# Load .env, because a native deployment runs `alembic upgrade head` directly
+# and nothing else puts DATABASE_URL into the environment for it.
+#
+# WHY THIS LINE EXISTS: under Docker Compose the URL is injected as a real
+# environment variable, so this file worked there and only there. Run the same
+# command on the Windows VPS -- which is what SETUP.md Step 7 tells an operator
+# to do, and what scripts/deploy.ps1 does at step 5 of 6 -- and DATABASE_URL is
+# simply absent, so every migration failed with "DATABASE_URL is not set". The
+# first-time setup could not create its tables, and every later deployment
+# carrying a migration would have stopped at the same point.
+#
+# load_dotenv does NOT overwrite variables that are already set, so Compose and
+# any explicit `$env:DATABASE_URL=...` still take precedence over the file. The
+# explicit requirement below is deliberately kept: reading the URL from
+# app.config instead would pick up its fallback default and quietly migrate a
+# DIFFERENT database than the operator intended.
+load_dotenv(_REPO_ROOT / ".env")
 
 from app.models import Base  # noqa: E402
 
