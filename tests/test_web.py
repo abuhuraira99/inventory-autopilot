@@ -520,3 +520,120 @@ def test_open_redirect_is_refused(anon_client):
     )
     if response.status_code == 303:
         assert response.headers["location"] == "/"
+
+
+# ===========================================================================
+# The Status page has to say *why*, and has to stop saying things that are done
+# ===========================================================================
+# Two failures found by watching a real operator use the dashboard on the first
+# deployment, an hour apart.
+#
+# The catalogue refresh failed and the alert read "Could not refresh the Amazon
+# catalogue" and nothing else. The reason was sitting in Notification.body,
+# written by the code that raised it, and the template never rendered it. On a
+# server where the application runs as a Scheduled Task -- no console, no log
+# file -- that left the operator with no way at all to find out what Amazon had
+# actually said.
+#
+# At the same time the permissions reminder was unconditional. The client fixed
+# the roles in Seller Central, and the reminder telling them to fix the roles
+# stayed on screen, beside two warnings that were still true. A panel where some
+# warnings can never be cleared is a panel people stop reading.
+
+
+def _add_alert(subject: str, body: str) -> None:
+    import app.db as db_module
+    from app.models import Notification
+
+    with db_module.SessionLocal() as session:
+        session.add(
+            Notification(kind="auth_failure", severity="warning", subject=subject, body=body)
+        )
+        session.commit()
+
+
+def _set(key: str, value) -> None:
+    import app.db as db_module
+
+    with db_module.SessionLocal() as session:
+        settings_store.set_value(session, key, value, actor="test")
+        session.commit()
+
+
+def test_an_alert_shows_the_reason_not_just_the_headline(app_client):
+    """
+    The body is the whole point of the alert, so it has to reach the screen.
+
+    "Could not refresh the Amazon catalogue" tells the operator only that
+    something they just watched fail has failed. The body carries what Amazon
+    actually refused, which is the difference between fixing it and guessing.
+    """
+    reason = "Amazon rejected the request: the report was cancelled (FATAL)."
+    _add_alert("Could not refresh the Amazon catalogue", reason)
+
+    page = app_client.get("/").text
+
+    assert "Could not refresh the Amazon catalogue" in page
+    assert reason in page
+
+
+def _readiness_warnings(monkeypatch) -> list[str]:
+    """
+    The warnings the Status page would show, with Amazon fully configured.
+
+    Read from services.readiness rather than by scraping the rendered page,
+    because the permissions reminder only appears once Amazon is ready, and
+    "ready" depends on LWA_CLIENT_ID and SELLER_ID -- process-level
+    configuration that app.config caches at import time and a page test cannot
+    reach. Patching the two fields is honest about what is being tested: the
+    rule, not the HTML.
+    """
+    import app.db as db_module
+    from app import services
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "lwa_client_id", "amzn1.application-oa2-client." + "a" * 32)
+    monkeypatch.setattr(app_settings, "seller_id", "A1B2C3D4E5F6G7")
+
+    with db_module.SessionLocal() as session:
+        return services.readiness(session).warnings
+
+
+def test_the_permissions_reminder_can_be_marked_as_done(app_client, monkeypatch):
+    """
+    Once the roles are fixed, the reminder must be able to go away.
+
+    It cannot be detected automatically -- SP-API does not report which roles
+    were granted -- so the operator confirming it is the only signal there is.
+    """
+    assert any("Product Listing" in w for w in _readiness_warnings(monkeypatch))
+
+    _set("amazon_roles_checked", True)
+
+    assert not any("Product Listing" in w for w in _readiness_warnings(monkeypatch))
+
+
+def test_marking_the_permissions_reminder_done_silences_nothing_else(app_client, monkeypatch):
+    """
+    It hides one reminder, not the panel.
+
+    A tick box that quietly turned off unrelated warnings would be the worst
+    possible version of this change: the two email warnings are about a stopped
+    run going unnoticed, which is a live risk on a machine nobody watches.
+    """
+    _set("amazon_roles_checked", True)
+
+    warnings = _readiness_warnings(monkeypatch)
+
+    assert any("No email address is set" in w for w in warnings)
+    assert any("No mail server is configured" in w for w in warnings)
+
+
+def test_the_permissions_reminder_is_on_by_default():
+    """
+    A new install must see the warning rather than inherit someone else's answer.
+
+    The default is the entire safety value of the setting: it says "nobody has
+    checked this yet", which is the correct state for every fresh deployment.
+    """
+    assert settings_store.SPEC_BY_KEY["amazon_roles_checked"].default is False

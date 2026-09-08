@@ -150,6 +150,21 @@ SPECS: list[Spec] = [
         sort_order=11,
     ),
     Spec(
+        key="amazon_roles_checked",
+        default=False,
+        value_type="bool",
+        label="Amazon app permissions have been checked",
+        help_text=(
+            "Tick this once you have confirmed in Seller Central that the app has "
+            "'Product Listing' ticked and 'Pricing' unticked, and have saved the new "
+            "refresh token. It only silences the reminder on the Status page. "
+            "Nothing else changes, and nothing here can grant a permission - if the "
+            "role is really missing, the first send still fails with a 403."
+        ),
+        category="safety",
+        sort_order=4,
+    ),
+    Spec(
         key="catalog_refresh_hour",
         default=3,
         value_type="int",

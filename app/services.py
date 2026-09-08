@@ -227,9 +227,18 @@ def readiness(session: Session) -> ReadinessReport:
     # -- the permission problem we already know about ---------------------
     # Recorded from the screenshot of the app supplied on 5 September 2026.
     # This is a warning rather than a problem because it cannot be detected
-    # from here - it only shows up as a 403 on the first write attempt - and
-    # forewarning is far more useful than a surprise.
-    if amazon_ready:
+    # from here - SP-API will not tell us which roles were granted, and a
+    # missing one only shows up as a 403 on the first write attempt. A
+    # forewarning is far more useful than that surprise.
+    #
+    # It is silenced by a setting rather than shown forever, because a warning
+    # that cannot be acted upon stops being read. Once the roles are fixed in
+    # Seller Central there is nothing left for this text to tell anybody, and
+    # leaving it on screen next to two real warnings teaches the operator to
+    # ignore the whole panel. The setting only hides the reminder; it cannot
+    # grant a role, and the 403 still happens if the work was not really done.
+    cfg = settings_store.get_all(session)
+    if amazon_ready and not cfg.get("amazon_roles_checked"):
         warnings.append(
             "Check the Amazon app's permissions before enabling automatic sending. "
             "When the app was last inspected it had 'Pricing' and 'Inventory and "
@@ -240,7 +249,6 @@ def readiness(session: Session) -> ReadinessReport:
         )
 
     # -- alerts ------------------------------------------------------------
-    cfg = settings_store.get_all(session)
     if not cfg.get("alert_emails_critical"):
         warnings.append(
             "No email address is set for serious problems. Add one in Settings under "

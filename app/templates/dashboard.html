@@ -139,6 +139,14 @@
           </span>
           <div class="md-grow">
             <strong>{{ alert.subject }}</strong>
+            {# The body carries the actual reason -- the API error, the exact
+               refusal from Amazon. It was written to the database and never
+               shown, so every alert read as "something went wrong" with no way
+               to find out what, on a machine whose console output goes nowhere
+               because it runs as a Scheduled Task. #}
+            {% if alert.body %}
+              <div class="md-body-small" style="white-space:pre-wrap;margin-top:4px">{{ alert.body }}</div>
+            {% endif %}
             <div class="md-body-small md-muted">{{ alert.at|ago }}</div>
           </div>
           <form method="post" action="/actions/acknowledge/{{ alert.id }}">
