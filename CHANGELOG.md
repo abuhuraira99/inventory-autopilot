@@ -79,6 +79,24 @@ ruff and mypy all passed over; one was a gate that had never once run.
   asserts the class still refuses unknown attributes, so the same trick cannot be retried
   under a different name.
 
+- **One NUL byte in the vendor feed destroyed the entire daily catalogue load.** The full
+  feed contained a `0x00` inside a text field. PostgreSQL text columns cannot hold one —
+  not escaped, not truncated; the whole INSERT is refused with `psycopg.DataError:
+  PostgreSQL text fields cannot contain NUL (0x00) bytes`. So a single byte somewhere in
+  1.15 million rows killed the run, and with it the only file the system actually depends
+  on. It survived weeks of real traffic because the five-minute deltas are a few hundred
+  rows each and never happened to carry one; it appeared the first time a full feed was
+  successfully downloaded. Stripped at the vendor boundary in `_clean`, along with the rest
+  of the C0 range, in the one place every feed text field passes through.
+- **The failure could not record itself.** A database error aborts the transaction, so
+  every statement afterwards raises `PendingRollbackError` — including the except block
+  whose entire job is to write down what went wrong. It could not set the status, could not
+  queue the alert, and could not even read `run.id` to format its own log line. The run row
+  kept `RUNNING` for ever and the real cause was buried under a rollback error that says
+  nothing about it. `_recover_session` now rolls back and re-fetches the run before the
+  handler touches anything; nothing is lost, because `checkpoint` had already committed
+  everything up to that point.
+
 - **A run interrupted by a restart stayed "Running" for ever.** `execute_run` marks a run
   failed on every exception it can see, but it cannot write anything when the process
   itself stops mid-run — a restart, a Ctrl+C, a Scheduled Task being stopped. The row kept

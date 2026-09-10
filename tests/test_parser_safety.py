@@ -258,3 +258,78 @@ class TestHeaderGate:
         message = str(exc.value)
         assert "has NOT been processed" in message
         assert "do not" in message.lower(), "the message should say what not to assume"
+
+
+# ===========================================================================
+# Bytes the database will not accept
+# ===========================================================================
+# The vendor's 1.15-million-row full feed contained a NUL byte. PostgreSQL text
+# columns cannot hold one -- not escaped, not truncated; the whole INSERT is
+# refused with "PostgreSQL text fields cannot contain NUL (0x00) bytes". So one
+# byte, somewhere in a million rows, destroyed the entire daily catalogue load.
+#
+# It survived weeks of real traffic because the five-minute delta files are a
+# few hundred rows each and never happened to contain one. It appeared the very
+# first time a full feed was successfully downloaded, which is exactly the file
+# the whole system depends on.
+
+
+class TestControlCharactersNeverReachTheDatabase:
+    def test_a_nul_byte_is_removed_from_a_title(self) -> None:
+        """The exact byte, in the exact field, that stopped the live server."""
+        from app.vendor.parser import _clean
+
+        cleaned = _clean("THIEVES\x00 & LIARS")
+
+        assert "\x00" not in cleaned
+        assert cleaned == "THIEVES & LIARS"
+
+    def test_the_other_control_characters_go_too(self) -> None:
+        """
+        Only NUL is rejected by PostgreSQL; the rest are still junk.
+
+        They are meaningless inside an artist or a title and they corrupt any
+        CSV report built from them later. Keeping a byte the vendor plainly did
+        not intend to send buys nothing and costs another failure mode.
+        """
+        from app.vendor.parser import _clean
+
+        assert _clean("OK\x01\x1f\x7fTITLE") == "OKTITLE"
+
+    def test_ordinary_whitespace_is_still_collapsed_not_deleted(self) -> None:
+        """
+        Tabs and newlines must stay word separators.
+
+        Deleting them instead would silently glue words together -- "ROCK N
+        ROLL" becoming "ROCKNROLL" would change how a title reads and how it
+        matches, which is a worse bug than the one being fixed.
+        """
+        from app.vendor.parser import _clean
+
+        assert _clean("AMERICAN\tROCK\nN  ROLL") == "AMERICAN ROCK N ROLL"
+
+    def test_a_row_carrying_a_nul_byte_still_parses(self, tmp_path) -> None:
+        """
+        End to end through the real parser, not just the helper.
+
+        A test of _clean alone would keep passing if a future change stopped
+        routing a field through it.
+        """
+        import zipfile
+
+        from app.vendor.parser import parse_all
+
+        archive = tmp_path / "FULL_FEED_110721_20260909.zip"
+        body = (
+            "barcode|artist|title|price|stock|format\n"
+            "5413356068320|GARNIER,\x00LAURENT|RETRO\x00SPECTIVE|12.12|3|CD\n"
+        )
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("feed.csv", body)
+
+        rows, _rejects, _stats = parse_all(archive)
+
+        assert len(rows) == 1
+        assert "\x00" not in rows[0].artist
+        assert "\x00" not in rows[0].title
+        assert rows[0].artist == "GARNIER,LAURENT"

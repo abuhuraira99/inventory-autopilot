@@ -29,6 +29,7 @@ import logging
 from contextlib import contextmanager
 
 import pytest
+from sqlalchemy import text
 
 
 class TestTheLogReachesADisk:
@@ -237,3 +238,65 @@ class TestARunNeverStaysRunningForever:
         for run in runs:
             session.refresh(run)
             assert run.status is RunStatus.FAILED
+
+
+class TestAFailedRunCanRecordThatItFailed:
+    """
+    A database error leaves the session unusable, including for the handler
+    whose entire job is to write down what went wrong.
+
+    On the live server a single NUL byte in a vendor feed aborted the
+    transaction. Every statement afterwards raised PendingRollbackError -- so
+    the except block could not set the status, could not queue the alert, and
+    could not even read ``run.id`` to format its own log line. It raised a
+    second exception on top of the first, the run row kept the status it was
+    created with, and the dashboard showed "Running" indefinitely while the
+    real cause was buried under a rollback error that says nothing about it.
+    """
+
+    def test_the_session_is_recovered_and_the_run_comes_back_alive(
+        self, session
+    ) -> None:
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from app.engine.pipeline import _recover_session
+        from app.models import Run, RunStatus, RunTrigger
+
+        run = Run(status=RunStatus.RUNNING, trigger=RunTrigger.SCHEDULE, triggered_by="t")
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+        # Poison the transaction the way a bad row does.
+        with pytest.raises(SQLAlchemyError):
+            session.execute(text("SELECT * FROM a_table_that_does_not_exist"))
+
+        recovered = _recover_session(session, run, run_id)
+
+        assert recovered.id == run_id
+        # The proof: the session can be written to again, which is what the
+        # failure handler needs and could not do before.
+        recovered.status = RunStatus.FAILED
+        session.commit()
+
+        session.expire_all()
+        assert session.get(Run, run_id).status is RunStatus.FAILED
+
+    def test_a_healthy_session_is_left_working(self, session) -> None:
+        """
+        The recovery runs on every failure path, including the ordinary ones.
+
+        Nothing is lost by rolling back here: everything up to this point was
+        already committed by ``checkpoint`` when the run opened.
+        """
+        from app.engine.pipeline import _recover_session
+        from app.models import Run, RunStatus, RunTrigger
+
+        run = Run(status=RunStatus.RUNNING, trigger=RunTrigger.SCHEDULE, triggered_by="t")
+        session.add(run)
+        session.commit()
+
+        recovered = _recover_session(session, run, run.id)
+
+        assert recovered.id == run.id
+        assert recovered.status is RunStatus.RUNNING

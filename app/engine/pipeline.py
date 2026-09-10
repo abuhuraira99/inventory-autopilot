@@ -183,6 +183,43 @@ def close_interrupted_runs(session: Session) -> int:
     return len(interrupted)
 
 
+def _recover_session(session: Session, run: Run, run_id: int) -> Run:
+    """
+    Make ``session`` usable again after a failure, and return a live ``run``.
+
+    WHY A RUN COULD FAIL WITHOUT EVER RECORDING THAT IT FAILED
+    =========================================================
+    A database error aborts the transaction. Every subsequent statement on that
+    session -- including reading ``run.id`` back off an expired object -- raises
+    ``PendingRollbackError`` instead of doing anything. So the handler that
+    exists to write down the failure could not write anything, could not even
+    format its own log line, and raised a second exception on top of the first.
+
+    The run row therefore kept the status it was created with and sat on the
+    dashboard as "Running" for ever, no alert was queued, and the original
+    cause was buried under a rollback error that says nothing about it. Three
+    of those accumulated on the live server before the log revealed that the
+    real problem was a single NUL byte in a vendor feed.
+
+    Rolling back first costs nothing on the paths where the session is healthy
+    -- there is no open work to lose, because everything up to this point was
+    already committed by ``checkpoint`` -- and on the path where it is not, it
+    is the difference between a recorded failure and a silent one.
+
+    The run is re-fetched by id because rollback expires the instance. The row
+    itself survives: ``checkpoint`` committed it the moment the run opened,
+    precisely so that a crash leaves evidence.
+    """
+    try:
+        session.rollback()
+    except Exception:  # pragma: no cover - a broken connection, nothing to save
+        log.exception("could not roll back after a failed run")
+        return run
+
+    fresh = session.get(Run, run_id)
+    return fresh if fresh is not None else run
+
+
 def execute_run(
     session: Session,
     *,
@@ -432,6 +469,7 @@ def execute_run(
                     )
 
     except (VendorConnectionError, FeedFormatError) as exc:
+        run = _recover_session(session, run, outcome.run_id)
         run.status = RunStatus.FAILED
         run.error = str(exc)
         outcome.status = RunStatus.FAILED
@@ -441,7 +479,8 @@ def execute_run(
         _notify(session, run, "vendor_unreachable", "critical",
                 "Inventory sync could not read the vendor's files", str(exc), cfg)
 
-    except Exception as exc:  # pragma: no cover - last resort
+    except Exception as exc:
+        run = _recover_session(session, run, outcome.run_id)
         run.status = RunStatus.FAILED
         run.error = f"{type(exc).__name__}: {exc}"
         outcome.status = RunStatus.FAILED

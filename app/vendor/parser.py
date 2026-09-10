@@ -43,6 +43,7 @@ import csv
 import hashlib
 import io
 import logging
+import re
 import zipfile
 import zlib
 from collections.abc import Iterator
@@ -528,6 +529,31 @@ def parse_all(
 # Field coercion
 # ---------------------------------------------------------------------------
 
+#: Control characters that must never reach the database.
+#:
+#: THE ONE THAT MATTERS IS NUL (0x00). PostgreSQL text columns cannot hold it
+#: at all -- not escaped, not truncated, the whole INSERT is refused:
+#:
+#:     psycopg.DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes
+#:
+#: A single such byte anywhere in the vendor's 1.15-million-row full feed
+#: therefore killed the entire run, and with it the whole daily catalogue. The
+#: five-minute delta files are a few hundred rows each and never happened to
+#: contain one, so this survived weeks of real delta traffic and only appeared
+#: the first time a full feed was successfully downloaded.
+#:
+#: The rest of the C0 range goes too. They are meaningless inside an artist or
+#: a title, they corrupt any CSV report built from them later, and keeping a
+#: byte the vendor plainly did not intend to send is not worth one more failure
+#: mode. Ordinary whitespace is untouched here -- the .split() that follows
+#: already collapses tabs and newlines into single spaces.
+#:
+#: Cleaned at the boundary rather than at the database, deliberately, and in
+#: exactly one place: the moment vendor text becomes our text is the moment to
+#: make it safe, and every text field a feed row carries passes through here.
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
 def _clean(value: str | None) -> str:
     """
     Trim and flatten a text field.
@@ -546,7 +572,7 @@ def _clean(value: str | None) -> str:
     """
     if value is None:
         return ""
-    return " ".join(str(value).split())[:600]
+    return " ".join(_CONTROL_CHARACTERS.sub("", str(value)).split())[:600]
 
 
 def _to_int(value: str | None) -> int | None:
