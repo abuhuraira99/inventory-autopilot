@@ -826,6 +826,11 @@ def _ingest(
     quarantine = app_settings.quarantine_dir
     quarantine.mkdir(parents=True, exist_ok=True)
 
+    #: Files fetched and verified in phase 1, waiting to be read in phase 2.
+    #: Holds (record, local path, member name) -- nothing that needs the
+    #: connection, which is the whole point of the split below.
+    fetched: list[tuple[FeedFile, Path, str | None]] = []
+
     tz = str(cfg["timezone"])
     only_today = bool(cfg["process_only_today"])
     max_age = float(cfg["max_file_age_hours"])
@@ -935,7 +940,8 @@ def _ingest(
                 record.status = FileStatus.VERIFIED
                 session.flush()
 
-            except (VendorConnectionError, FeedFormatError) as exc:
+            except FeedFormatError as exc:
+                # A bad file, not a bad connection. The next one may be fine.
                 record.status = FileStatus.QUARANTINED
                 record.quarantine_reason = str(exc)
                 local.unlink(missing_ok=True)
@@ -944,27 +950,64 @@ def _ingest(
                 outcome.errors.append(str(exc))
                 continue
 
-            # ---- stages 2-3: parse and store ---------------------------
-            try:
-                stats = _parse_and_store(
-                    session, run, cfg, record, local, touched, member_name=member_name
-                )
-            except FeedFormatError as exc:
+            except VendorConnectionError as exc:
+                # STOP, rather than continue. The connection is gone, so every
+                # remaining download would fail too and write its own identical
+                # quarantine record for no benefit. Quarantined files are not
+                # marked processed, so all of them -- this one included -- are
+                # collected by the next run.
                 record.status = FileStatus.QUARANTINED
                 record.quarantine_reason = str(exc)
+                local.unlink(missing_ok=True)
                 session.flush()
-                outcome.errors.append(str(exc))
                 log.error("run %d: %s", run.id, exc)
-                continue
+                outcome.errors.append(str(exc))
+                break
 
-            stats_by_file[record.id] = stats
-            processed.append(record)
-            run.files_processed += 1
-            outcome.files_processed += 1
-            run.rows_read += stats.usable_rows
-            run.rows_rejected += stats.rejected_rows
-            outcome.rows_read += stats.usable_rows
+            fetched.append((record, local, member_name))
+
+    # ---- stages 2-3: parse and store, with the connection CLOSED ---------
+    # THE CONNECTION IS NOT HELD WHILE THIS RUNS, AND THAT IS THE POINT.
+    #
+    # Reading a file used to happen inside the `with connect(...)` block above,
+    # so the control connection sat idle for exactly as long as parsing took: a
+    # second for a delta, and seventeen minutes for the 1.15-million-row full
+    # feed. The vendor closes a connection idle that long -- correctly; it is
+    # their bandwidth -- so the download of the next file died with
+    # "[Errno 10054] An existing connection was forcibly closed by the remote
+    # host", and every full-feed run failed at the last step after doing all
+    # the work.
+    #
+    # Wrapping that error stopped it destroying the run. This stops it
+    # happening. Downloads are quick and back to back, the connection is hung
+    # up as soon as the last byte arrives, and the long part of the work now
+    # holds nothing the vendor has to keep alive. It is also politer: the
+    # vendor asked to be polled gently, and a connection held open for a
+    # quarter of an hour per run is not that.
+    #
+    # Everything needed here was captured during phase 1. Nothing in this loop
+    # can touch the network.
+    for record, local, member in fetched:
+        try:
+            stats = _parse_and_store(
+                session, run, cfg, record, local, touched, member_name=member
+            )
+        except FeedFormatError as exc:
+            record.status = FileStatus.QUARANTINED
+            record.quarantine_reason = str(exc)
             session.flush()
+            outcome.errors.append(str(exc))
+            log.error("run %d: %s", run.id, exc)
+            continue
+
+        stats_by_file[record.id] = stats
+        processed.append(record)
+        run.files_processed += 1
+        outcome.files_processed += 1
+        run.rows_read += stats.usable_rows
+        run.rows_rejected += stats.rejected_rows
+        outcome.rows_read += stats.usable_rows
+        session.flush()
 
     return processed, stats_by_file, touched
 

@@ -91,6 +91,21 @@ ruff and mypy all passed over; one was a gate that had never once run.
   interval, not only hour-divisible ones: 15 minutes with an offset of 10 gives 10, 25, 40
   and 55 past.
 
+- **The vendor connection is no longer held open while feeds are read.** Reading a file
+  used to happen inside the open FTP connection, so the control connection sat idle for
+  exactly as long as parsing took — a second for a delta, seventeen minutes for the
+  1.15-million-row full feed. That idle time is what the vendor was hanging up on, and it
+  was also simply rude: they asked to be polled gently, and a connection held for a quarter
+  of an hour per run is not that.
+  FETCH is now two phases. Downloads happen back to back and the connection is closed the
+  moment the last byte arrives; parsing and storing then run holding nothing the vendor has
+  to keep alive. A connection lost mid-download now stops the download phase rather than
+  writing an identical quarantine record for every remaining file — quarantined files are
+  never marked processed, so the next run collects them all.
+  The ordering is the fix, so the ordering is what the test asserts: it records when the
+  connection closes and when parsing starts, and fails on the old structure with
+  `[download, parse, close]`.
+
 - **A dropped FTP connection threw away a full feed that had already been read.** The
   vendor closes an idle control connection, and it sits idle for exactly as long as the
   previous file takes to process — seventeen minutes for the 1.15-million-row full feed. So

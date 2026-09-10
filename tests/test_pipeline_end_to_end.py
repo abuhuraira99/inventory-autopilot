@@ -528,3 +528,77 @@ class TestDuplicateWork:
             trigger=RunTrigger.MANUAL, triggered_by="test",
         )
         assert second.files_processed == 0, "the same file was processed twice"
+
+
+# ===========================================================================
+# The vendor connection is not held while files are read
+# ===========================================================================
+
+
+class TestTheConnectionIsClosedBeforeParsing:
+    """
+    Reading a feed used to happen inside the open FTP connection.
+
+    The control connection therefore sat idle for exactly as long as parsing
+    took: a second for a delta, and seventeen minutes for the 1.15-million-row
+    full feed. The vendor closes a connection idle that long -- correctly, it
+    is their bandwidth -- so the download of the next file died with
+    "[Errno 10054] An existing connection was forcibly closed by the remote
+    host", and every full-feed run failed at the last step, after doing all of
+    the work, and rolled it all back.
+
+    Ordering is the whole fix, so ordering is what this asserts. A test of the
+    error handling alone would pass just as happily against code that still
+    holds the connection open for a quarter of an hour.
+    """
+
+    def test_the_download_finishes_and_the_connection_closes_before_any_parse(
+        self, session, wired, account, toy_catalogue_guardrails, monkeypatch
+    ) -> None:
+        import app.engine.pipeline as pipeline
+
+        order: list[str] = []
+
+        real_download = wired.download
+
+        def watched_download(name, destination):
+            order.append("download")
+            return real_download(name, destination)
+
+        monkeypatch.setattr(wired, "download", watched_download)
+
+        # The fake vendor is yielded by a context manager, so "close" is the
+        # moment that manager exits -- which is what the real client does.
+        @contextmanager
+        def closing_connect(_creds):
+            try:
+                yield wired
+            finally:
+                order.append("close")
+
+        monkeypatch.setattr(pipeline, "connect", closing_connect)
+
+        real_parse = pipeline._parse_and_store
+
+        def watched_parse(*args, **kwargs):
+            order.append("parse")
+            return real_parse(*args, **kwargs)
+
+        monkeypatch.setattr(pipeline, "_parse_and_store", watched_parse)
+
+        execute_run(
+            session,
+            client=None,
+            vendor_credentials=CREDS,
+            trigger=RunTrigger.MANUAL,
+            triggered_by="test",
+        )
+
+        assert "parse" in order, "nothing was parsed, so the ordering proves nothing"
+        assert "close" in order, "the connection was never closed"
+        assert order.index("close") < order.index("parse"), (
+            f"the connection was still open while parsing: {order}"
+        )
+        assert order.index("download") < order.index("close"), (
+            f"parsing was reordered ahead of the download: {order}"
+        )
