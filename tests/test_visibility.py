@@ -159,3 +159,81 @@ class TestTheCatalogueRefreshAlwaysReportsBack:
         assert "RuntimeError" in alerts[0].body
         assert "the refresh token has expired" in alerts[0].body
         assert _Client.closed, "the client must still be closed on the failure path"
+
+
+class TestARunNeverStaysRunningForever:
+    """
+    A run interrupted by a restart must not sit on the dashboard as "Running".
+
+    execute_run marks a run FAILED on every exception it can see, but it cannot
+    write anything when the process itself stops mid-run: a restart, a Ctrl+C,
+    a Scheduled Task being stopped. The row keeps the status it was created
+    with and stays RUNNING for ever.
+
+    On the first deployment three of these accumulated during an afternoon of
+    updates. The dashboard header reported "Running" indefinitely, and when a
+    genuine fault appeared later it was impossible to tell the live run from
+    the corpses -- which is the exact opposite of what a status page is for.
+    """
+
+    def _run(self, session, status):
+        from app.models import Run, RunTrigger
+
+        run = Run(status=status, trigger=RunTrigger.SCHEDULE, triggered_by="test")
+        session.add(run)
+        session.commit()
+        return run
+
+    def test_a_run_left_running_is_closed_at_startup(self, session) -> None:
+        from app.engine.pipeline import close_interrupted_runs
+        from app.models import RunStatus
+
+        run = self._run(session, RunStatus.RUNNING)
+
+        assert close_interrupted_runs(session) == 1
+
+        session.refresh(run)
+        assert run.status is RunStatus.FAILED
+        assert run.finished_at is not None
+        assert "Interrupted" in (run.error or "")
+        # The operator's real question is "did it send half a batch?"
+        assert "undone" in (run.error or "")
+
+    def test_finished_runs_are_left_exactly_as_they_are(self, session) -> None:
+        """
+        Only RUNNING rows are touched.
+
+        A sweep that rewrote history would destroy the record this system is
+        built to keep -- and NO_CHANGES, the ordinary steady-state outcome,
+        must never be relabelled as a failure.
+        """
+        from app.engine.pipeline import close_interrupted_runs
+        from app.models import RunStatus
+
+        done = self._run(session, RunStatus.NO_CHANGES)
+        completed = self._run(session, RunStatus.COMPLETED)
+
+        assert close_interrupted_runs(session) == 0
+
+        session.refresh(done)
+        session.refresh(completed)
+        assert done.status is RunStatus.NO_CHANGES
+        assert completed.status is RunStatus.COMPLETED
+
+    def test_every_interrupted_run_is_closed_not_just_the_newest(self, session) -> None:
+        """
+        Three had piled up on the real server, not one.
+
+        Closing only the most recent would leave the older ones on the Runs
+        page still claiming to be in progress.
+        """
+        from app.engine.pipeline import close_interrupted_runs
+        from app.models import RunStatus
+
+        runs = [self._run(session, RunStatus.RUNNING) for _ in range(3)]
+
+        assert close_interrupted_runs(session) == 3
+
+        for run in runs:
+            session.refresh(run)
+            assert run.status is RunStatus.FAILED

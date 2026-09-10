@@ -79,6 +79,21 @@ ruff and mypy all passed over; one was a gate that had never once run.
   asserts the class still refuses unknown attributes, so the same trick cannot be retried
   under a different name.
 
+- **A run interrupted by a restart stayed "Running" for ever.** `execute_run` marks a run
+  failed on every exception it can see, but it cannot write anything when the process
+  itself stops mid-run — a restart, a Ctrl+C, a Scheduled Task being stopped. The row kept
+  the status it was created with, permanently.
+  Not cosmetic: the dashboard header takes its state from the newest run, so the whole
+  system reported *Running* indefinitely, and three of these piled up during an afternoon
+  of updates on the first deployment. When a genuine fault appeared later, the live run
+  could not be told apart from corpses left hours earlier — the exact opposite of what a
+  status page is for.
+  Start-up now closes them. The claim is airtight only there: exactly one process owns the
+  scheduler and it has just begun, so nothing can legitimately be running. They are marked
+  failed with an explanation that answers the operator's real question — whether half a
+  batch went out — rather than a new status that would have to be threaded through the
+  enum, the filters, the badges and the templates.
+
 - **On Windows the application had no log at all, and the catalogue refresh could fail
   without leaving a single trace anywhere.** Two defects that only became dangerous
   together. Logging went to stdout only — which under Docker Compose *is* the log, and on

@@ -106,6 +106,16 @@ async def lifespan(app: FastAPI):  # noqa: ANN201
         if created:
             log.info("seeded %d default settings", created)
 
+        # Before the scheduler starts, so the dashboard never shows a run as
+        # in progress when the process that owned it is gone. Safe here and
+        # nowhere else: this process has only just started, and exactly one
+        # process owns the scheduler, so nothing can legitimately be running.
+        from app.engine.pipeline import close_interrupted_runs
+
+        closed = close_interrupted_runs(session)
+        if closed:
+            log.warning("closed %d run(s) left in progress by a previous process", closed)
+
         admin_email = "admin@localhost"
         _user, generated = ensure_admin_user(session, email=admin_email)
         if generated:

@@ -132,6 +132,57 @@ class RunOutcome:
 # The run
 # ===========================================================================
 
+def close_interrupted_runs(session: Session) -> int:
+    """
+    Mark every run still labelled RUNNING as failed. Returns how many.
+
+    Called once at start-up, where the claim is airtight: exactly one process
+    owns the scheduler, that process has only just begun, and therefore nothing
+    can legitimately be running. Any row saying otherwise is a leftover.
+
+    WHY THIS IS NEEDED
+    ==================
+    execute_run marks a run FAILED on every exception, but it cannot mark
+    anything when the process itself stops mid-run -- a restart, a Ctrl+C, a
+    Scheduled Task being stopped. The row keeps the status it was created with
+    and stays RUNNING for ever.
+
+    That is not a cosmetic problem. The dashboard header reads its state from
+    the newest run, so the whole system reported "Running" indefinitely; the
+    Runs page showed rows that had been "in progress" for over a day; and an
+    operator watching a genuinely stuck run could not tell it apart from a
+    corpse left by a restart hours earlier. On the first deployment, three of
+    these accumulated during an afternoon of updates and made a real fault much
+    harder to see -- the exact opposite of what a status page is for.
+
+    The status used is FAILED rather than a new one: it did not finish, and
+    inventing a status would mean touching the enum, the filters, the badges
+    and the templates to say something the error message already says.
+    """
+    interrupted = session.execute(
+        select(Run).where(Run.status == RunStatus.RUNNING)
+    ).scalars().all()
+
+    for run in interrupted:
+        run.status = RunStatus.FAILED
+        run.finished_at = utcnow()
+        run.error = (
+            "Interrupted: the application stopped while this run was in progress, "
+            "so it could not record how it ended. Nothing was left half-sent - a "
+            "run only ever sends inside a batch, and any batch it had started is "
+            "recorded and can be undone. The next scheduled run picks up from "
+            "where this one left off."
+        )
+        log.warning(
+            "run %d was still marked running at start-up; recording it as interrupted",
+            run.id,
+        )
+
+    if interrupted:
+        session.commit()
+    return len(interrupted)
+
+
 def execute_run(
     session: Session,
     *,
