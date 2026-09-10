@@ -101,6 +101,7 @@ def configure() -> None:
     # system's volume and cannot fill a 30 GB disk. Failure to open the file is
     # logged and tolerated -- stdout still works, and refusing to boot because
     # a log file is unwritable would be a worse trade than running unlogged.
+    file_handler_error: OSError | None = None
     try:
         log_dir = settings.data_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -114,8 +115,13 @@ def configure() -> None:
         file_handler.addFilter(RedactingFilter())
         handlers.append(file_handler)
     except OSError as exc:
-        # Logged through the stream handler below, which is installed either way.
-        print(f"WARNING: could not open the log file ({exc}); logging to stdout only")
+        # Held, not printed. The stream handler above has not been attached to
+        # the root logger yet, so a log call here would go nowhere -- but a
+        # bare print is the one thing in this application that writes to stdout
+        # without passing through the redaction filter, and a message built
+        # from an exception is not a good place to make that exception. Emitted
+        # a few lines below, once there is somewhere for it to go.
+        file_handler_error = exc
 
     root = logging.getLogger()
     for existing in list(root.handlers):
@@ -129,6 +135,13 @@ def configure() -> None:
         lg = logging.getLogger(name)
         lg.handlers = list(handlers)
         lg.propagate = False
+
+    if file_handler_error is not None:
+        logging.getLogger(__name__).warning(
+            "could not open the log file (%s); logging to stdout only, which on a "
+            "Windows Scheduled Task means the log is discarded",
+            file_handler_error,
+        )
 
     # Libraries that are chatty at INFO and tell us nothing useful.
     logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)

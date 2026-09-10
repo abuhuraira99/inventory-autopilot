@@ -184,3 +184,50 @@ class TestStartingTheSchedulerDoesNotFireARun:
         job = started._scheduler.get_job(started.JOB_SYNC)
 
         assert job.next_run_time.minute == 30
+
+
+class TestChangingTheIntervalKeepsTheAnchor:
+    """
+    The dashboard lets the client change the interval, and that path rebuilds
+    the trigger. If it rebuilt an unanchored one, the timetable would start
+    drifting again from the next settings change -- silently, and long after
+    anyone was still watching for it.
+
+    This path had no test at all, which is how the forced-first-fire bug lived
+    next to a passing test of the trigger.
+    """
+
+    def test_a_new_interval_still_lands_on_the_configured_minute(
+        self, monkeypatch
+    ) -> None:
+        from app import scheduler
+        from app.config import settings
+
+        monkeypatch.setattr(scheduler, "session_scope", _no_session)
+        monkeypatch.setattr(scheduler, "_timezone", lambda: ZoneInfo("America/Los_Angeles"))
+        monkeypatch.setattr(settings, "enable_scheduler", True, raising=False)
+        monkeypatch.setattr(scheduler, "job_sync", lambda: None)
+        monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)
+
+        values = {"sync_interval_minutes": 60, "sync_offset_minutes": 20, "catalog_refresh_hour": 3}
+        monkeypatch.setattr(scheduler.settings_store, "get", lambda _s, key: values.get(key))
+
+        started = scheduler.start()
+        assert started is not None
+        try:
+            assert started.get_job(scheduler.JOB_SYNC).next_run_time.minute == 20
+
+            # The client changes the interval on the dashboard.
+            values["sync_interval_minutes"] = 30
+            scheduler._reschedule_sync_if_needed()
+
+            job = started.get_job(scheduler.JOB_SYNC)
+            assert int(job.trigger.interval.total_seconds() // 60) == 30, (
+                "the new interval was not applied"
+            )
+            assert job.next_run_time.minute in (20, 50), (
+                f"the anchor was lost on reschedule: {job.next_run_time}"
+            )
+        finally:
+            started.shutdown(wait=False)
+            monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)

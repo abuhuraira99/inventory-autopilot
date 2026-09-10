@@ -319,7 +319,7 @@ class TestControlCharactersNeverReachTheDatabase:
 
         from app.vendor.parser import parse_all
 
-        archive = tmp_path / "FULL_FEED_110721_20260909.zip"
+        archive = tmp_path / "FULL_FEED_999999_20260909.zip"
         body = (
             "barcode|artist|title|price|stock|format\n"
             "5413356068320|GARNIER,\x00LAURENT|RETRO\x00SPECTIVE|12.12|3|CD\n"

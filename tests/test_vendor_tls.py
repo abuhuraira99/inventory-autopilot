@@ -449,7 +449,7 @@ def test_a_dropped_connection_becomes_a_vendor_error(tmp_path) -> None:
     client._ftp = _DeadConnection()  # type: ignore[assignment]
 
     with pytest.raises(VendorConnectionError) as caught:
-        client.download("DELTA_FEED_110721_20260909_24.zip", tmp_path / "d.zip")
+        client.download("DELTA_FEED_999999_20260909_24.zip", tmp_path / "d.zip")
 
     message = str(caught.value)
     assert "connection to ftp.example.test was lost" in message
@@ -473,7 +473,7 @@ def test_a_failed_download_leaves_no_partial_file(tmp_path) -> None:
         VendorCredentials(host="ftp.example.test", port=21, username="u", password="p")
     )
     client._ftp = _DeadConnection()  # type: ignore[assignment]
-    destination = tmp_path / "FULL_FEED_110721_20260909.zip"
+    destination = tmp_path / "FULL_FEED_999999_20260909.zip"
 
     with pytest.raises(VendorConnectionError):
         client.download(destination.name, destination)
