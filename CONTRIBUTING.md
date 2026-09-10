@@ -11,7 +11,7 @@ things in here that are load-bearing in ways that are not obvious from the code.
 python -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt    # .venv\Scripts\pip on Windows
 
-pytest                # 320 tests, no network, no live database
+pytest                # 324 tests, no network, no live database
 ruff check .          # linting; see the note below about formatting
 mypy                  # configured in pyproject.toml; passes clean
 ```
@@ -97,7 +97,7 @@ two files look alike and differ only in what their *silence* means.
 | A barcode's **absence** means | **unchanged** | **the vendor has dropped it** |
 | May zero a missing product | **never** | yes, per the threshold setting |
 | Triggers a full reconcile | no | yes |
-| Real size | 23–320 rows | ~1,158,340 rows |
+| Real size | 23–324 rows | ~1,158,340 rows |
 
 Read one as the other and you get one of two failures: dead stock left on sale forever,
 or the catalogue zeroed. `FeedKind` is explicit on every `FeedFile` row for exactly this

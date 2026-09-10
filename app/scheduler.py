@@ -41,7 +41,7 @@ every 15 minutes without a restart, which was the point.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -326,6 +326,44 @@ def _timezone() -> ZoneInfo:
         return ZoneInfo("America/New_York")
 
 
+def _sync_trigger(interval_minutes: int) -> IntervalTrigger:
+    """
+    The sync trigger, anchored so restarts cannot move the timetable.
+
+    WHY AN ANCHOR AT ALL
+    ====================
+    An interval trigger with no start date begins counting from the moment the
+    process starts. Every restart therefore re-phased the whole schedule: checks
+    that had been landing at 17 past moved to 31 past, then to 09 past, then
+    wherever the next restart happened to fall. During a week of updates the
+    timetable wandered right around the clock.
+
+    That is worse than untidy. The vendor publishes on a fixed clock -- the full
+    feed at about 8 PM their time -- so when our checks happen decides how long
+    a new file waits before anyone sees it, and a schedule that moves cannot be
+    reasoned about at all. It also made the deployment harder to read: an
+    operator who restarts to pick up a change should not have to work out
+    whether a run that just appeared was caused by the restart.
+
+    Anchoring to midnight plus an offset makes the times deterministic and
+    identical after every restart, and it works for any interval rather than
+    only for hour-divisible ones: 60 minutes with an offset of 10 gives 10 past
+    every hour, 15 minutes gives 10, 25, 40 and 55 past.
+
+    APScheduler computes the next fire time forward from the anchor, so a
+    restart lands on the same grid it was already on instead of starting a new
+    one -- and lands on the NEXT slot, which is why restarting no longer fires
+    a run of its own.
+    """
+    tz = _timezone()
+    with session_scope() as session:
+        offset = int(settings_store.get(session, "sync_offset_minutes") or 0)
+
+    midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    anchor = midnight + timedelta(minutes=max(0, min(59, offset)))
+    return IntervalTrigger(minutes=interval_minutes, start_date=anchor, timezone=tz)
+
+
 def _current_interval_minutes() -> int:
     with session_scope() as session:
         return int(settings_store.get(session, "sync_interval_minutes") or 60)
@@ -352,7 +390,7 @@ def _reschedule_sync_if_needed() -> None:
 
     if current_minutes != wanted:
         log.info("sync interval changed from %s to %s minutes; rescheduling", current_minutes, wanted)
-        _scheduler.reschedule_job(JOB_SYNC, trigger=IntervalTrigger(minutes=wanted))
+        _scheduler.reschedule_job(JOB_SYNC, trigger=_sync_trigger(wanted))
 
 
 def start() -> BackgroundScheduler | None:
@@ -394,7 +432,7 @@ def start() -> BackgroundScheduler | None:
 
     scheduler.add_job(
         job_sync,
-        trigger=IntervalTrigger(minutes=interval),
+        trigger=_sync_trigger(interval),
         id=JOB_SYNC,
         name="Check the vendor and sync quantities",
         replace_existing=True,

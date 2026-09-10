@@ -79,6 +79,18 @@ ruff and mypy all passed over; one was a gate that had never once run.
   asserts the class still refuses unknown attributes, so the same trick cannot be retried
   under a different name.
 
+- **Every restart moved the whole sync timetable.** The interval trigger had no start
+  date, so it counted from the moment the process started. Checks landing at 17 past moved
+  to 31 past, then to 09 past, then wherever the next restart fell — and a restart looked
+  like it had triggered a run of its own. Over a week of updates the timetable wandered
+  around the clock.
+  Worse than untidy: the vendor publishes on a fixed clock, so *when* the checks happen
+  decides how long a new file waits before anyone sees it. The schedule is now anchored to
+  midnight plus a new **Run the check at … minutes past the hour** setting, so the times
+  are identical after every restart and a restart no longer fires a run. Works for any
+  interval, not only hour-divisible ones: 15 minutes with an offset of 10 gives 10, 25, 40
+  and 55 past.
+
 - **One NUL byte in the vendor feed destroyed the entire daily catalogue load.** The full
   feed contained a `0x00` inside a text field. PostgreSQL text columns cannot hold one —
   not escaped, not truncated; the whole INSERT is refused with `psycopg.DataError:

@@ -137,6 +137,24 @@ SPECS: list[Spec] = [
         sort_order=10,
     ),
     Spec(
+        key="sync_offset_minutes",
+        default=0,
+        value_type="int",
+        min_value=0,
+        max_value=59,
+        label="Run the check at \u2026 minutes past the hour",
+        help_text=(
+            "Fixes the clock the checks run on. With the interval above set to 60 and "
+            "this set to 10, a check happens at 10 past every hour - on the hour it "
+            "was set to, not on whatever minute the server was last restarted. "
+            "Restarting no longer shifts the timetable or triggers an extra run. "
+            "With a shorter interval the same offset repeats: 15 minutes and an "
+            "offset of 10 gives 10, 25, 40 and 55 past."
+        ),
+        category="schedule",
+        sort_order=11,
+    ),
+    Spec(
         key="timezone",
         default="America/New_York",
         value_type="str",
