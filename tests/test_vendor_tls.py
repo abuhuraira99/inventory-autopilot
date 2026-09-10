@@ -26,6 +26,7 @@ import ssl
 from pathlib import Path
 
 import certifi
+import pytest
 
 from app.vendor.ftp_client import _tls_context
 
@@ -409,3 +410,72 @@ def test_probing_is_capped() -> None:
 
     assert len(stub.calls) == _FtpsClient.PROBE_LIMIT
     assert all(kind == "file" for _name, kind in resolved)
+
+
+# ---------------------------------------------------------------------------
+# A dropped connection must not destroy work already done
+# ---------------------------------------------------------------------------
+# The vendor closes an idle control connection, and it sits idle for as long as
+# the previous file takes to process -- seventeen minutes for the
+# 1.15-million-row full feed. So the download of the NEXT file raised
+# ConnectionResetError, which is not a VendorConnectionError, so it sailed past
+# the handler that exists to quarantine one file and carry on. The whole run
+# failed and the full feed that had just been read successfully was rolled back
+# with it. Every day, on the one file the entire system depends on.
+
+
+class _DeadConnection:
+    """An ftplib.FTP whose transfer fails the way a closed connection does."""
+
+    def retrbinary(self, cmd, callback, blocksize=8192):
+        raise ConnectionResetError(
+            10054, "An existing connection was forcibly closed by the remote host"
+        )
+
+
+def test_a_dropped_connection_becomes_a_vendor_error(tmp_path) -> None:
+    """
+    The exact failure from the live server, at the exact boundary.
+
+    Asserted as VendorConnectionError because that is the type the pipeline
+    catches to quarantine one file and keep going. Raised raw, it takes the
+    run down and everything the run had already stored with it.
+    """
+    from app.vendor.ftp_client import VendorConnectionError, VendorCredentials, _FtpsClient
+
+    client = _FtpsClient(
+        VendorCredentials(host="ftp.example.test", port=21, username="u", password="p")
+    )
+    client._ftp = _DeadConnection()  # type: ignore[assignment]
+
+    with pytest.raises(VendorConnectionError) as caught:
+        client.download("DELTA_FEED_110721_20260909_24.zip", tmp_path / "d.zip")
+
+    message = str(caught.value)
+    assert "connection to ftp.example.test was lost" in message
+    assert "retried on the next run" in message
+    # Names the underlying cause: "connection lost" alone does not say whether
+    # it was the vendor, the network, or this machine.
+    assert "ConnectionResetError" in message
+
+
+def test_a_failed_download_leaves_no_partial_file(tmp_path) -> None:
+    """
+    A .part left behind would be mistaken for a real file by the next run.
+
+    The download writes to <name>.part and renames on success precisely so a
+    truncated transfer can never be read as a complete feed -- which for a full
+    feed would read as "the vendor has sold out of everything".
+    """
+    from app.vendor.ftp_client import VendorConnectionError, VendorCredentials, _FtpsClient
+
+    client = _FtpsClient(
+        VendorCredentials(host="ftp.example.test", port=21, username="u", password="p")
+    )
+    client._ftp = _DeadConnection()  # type: ignore[assignment]
+    destination = tmp_path / "FULL_FEED_110721_20260909.zip"
+
+    with pytest.raises(VendorConnectionError):
+        client.download(destination.name, destination)
+
+    assert list(tmp_path.iterdir()) == [], "a partial download was left on disk"

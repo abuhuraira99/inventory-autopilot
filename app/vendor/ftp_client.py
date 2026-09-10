@@ -500,6 +500,35 @@ class _FtpsClient(VendorClient):
             log.info("downloaded %s (%s bytes)", name, f"{written:,}")
             return written
 
+        except VendorConnectionError:
+            part.unlink(missing_ok=True)
+            raise
+
+        except (ftplib.Error, OSError, EOFError) as exc:
+            # WRAPPED, NOT RE-RAISED RAW. The caller catches
+            # VendorConnectionError so it can quarantine one file and carry on
+            # with the rest of the run; a bare ConnectionResetError sails past
+            # that handler and destroys the whole run instead.
+            #
+            # That is not theoretical. The vendor closes an idle control
+            # connection, and the connection sits idle for as long as the
+            # previous file takes to process -- seventeen minutes for the
+            # 1.15-million-row full feed. So the download of the NEXT file
+            # raised "[Errno 10054] An existing connection was forcibly closed
+            # by the remote host", the run failed, and the full feed that had
+            # just been read successfully was rolled back with it. Every day,
+            # on the one file the whole system depends on.
+            #
+            # Losing a small delta file here costs nothing: it is not marked
+            # processed, so the next run collects it. Losing the full feed
+            # because of it costs the entire catalogue.
+            part.unlink(missing_ok=True)
+            raise VendorConnectionError(
+                f"The connection to {self.creds.host} was lost while downloading "
+                f"{name} ({type(exc).__name__}: {exc}). This file will be retried "
+                f"on the next run; anything already read in this run is kept."
+            ) from exc
+
         except Exception:
             part.unlink(missing_ok=True)
             raise

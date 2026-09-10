@@ -91,6 +91,18 @@ ruff and mypy all passed over; one was a gate that had never once run.
   interval, not only hour-divisible ones: 15 minutes with an offset of 10 gives 10, 25, 40
   and 55 past.
 
+- **A dropped FTP connection threw away a full feed that had already been read.** The
+  vendor closes an idle control connection, and it sits idle for exactly as long as the
+  previous file takes to process — seventeen minutes for the 1.15-million-row full feed. So
+  the download of the *next* file raised `ConnectionResetError: [Errno 10054] An existing
+  connection was forcibly closed by the remote host`. That is not a `VendorConnectionError`,
+  so it sailed straight past the handler that exists to quarantine one file and carry on,
+  the whole run failed, and the full feed just read successfully was rolled back with it —
+  after seventeen minutes of work, every day, on the one file the system depends on.
+  Now wrapped, so one unreachable file is quarantined and retried next run while everything
+  already stored is kept. The partial `.part` file is still removed, so a truncated
+  download can never be mistaken for a complete feed.
+
 - **One NUL byte in the vendor feed destroyed the entire daily catalogue load.** The full
   feed contained a `0x00` inside a text field. PostgreSQL text columns cannot hold one —
   not escaped, not truncated; the whole INSERT is refused with `psycopg.DataError:
