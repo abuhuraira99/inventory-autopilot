@@ -210,7 +210,7 @@ This is the distinction most likely to be broken by a well-meaning refactor.
 | A barcode's **absence** means | **unchanged** | **the vendor has dropped it** |
 | May zero a missing product | **never** | yes, per the threshold setting |
 | Triggers a full reconcile | no | yes |
-| Real size | 23–327 rows | ~1,158,340 rows |
+| Real size | 23–329 rows | ~1,158,340 rows |
 
 Confusing them in one direction strands dead stock on sale forever. In the other it
 zeroes the catalogue. `FeedKind` is explicit on every `FeedFile` row for that reason,
@@ -388,7 +388,7 @@ column name and turns `seller-sku` into `﻿seller-sku` — silently breaking a 
 
 ## Testing
 
-327 tests, ~69% coverage, mypy clean. **No network, no live database.** A test that could
+329 tests, ~69% coverage, mypy clean. **No network, no live database.** A test that could
 reach Amazon is a test that could change a live listing, and that must not exist in a CI
 pipeline. Anything needing a live service is `@pytest.mark.integration` and excluded by
 default.

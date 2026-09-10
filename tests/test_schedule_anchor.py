@@ -115,3 +115,72 @@ def test_an_offset_outside_the_hour_cannot_break_the_schedule(wired) -> None:
 
     set_offset(-5)
     assert scheduler._sync_trigger(60).start_date.minute == 0
+
+
+class TestStartingTheSchedulerDoesNotFireARun:
+    """
+    Goes through the real start(), because the trigger being right was not enough.
+
+    The anchored trigger was correct and had a passing test, and the schedule
+    still moved on every restart -- because add_job passed
+    next_run_time=datetime.now() and overrode it. Worse, once APScheduler has a
+    previous fire time it computes the next as previous + interval and stops
+    consulting the anchor, so one forced first fire re-based the whole
+    timetable and the setting did nothing at all.
+
+    A test of the trigger alone could never have caught that. This one asserts
+    the property the operator actually cares about: restarting does not run
+    anything, and the next run is on the grid.
+    """
+
+    @pytest.fixture()
+    def started(self, monkeypatch):
+        from app import scheduler
+        from app.config import settings
+
+        monkeypatch.setattr(scheduler, "session_scope", _no_session)
+        monkeypatch.setattr(scheduler, "_timezone", lambda: ZoneInfo("America/Los_Angeles"))
+        monkeypatch.setattr(settings, "enable_scheduler", True, raising=False)
+
+        values = {"sync_interval_minutes": 60, "sync_offset_minutes": 30, "catalog_refresh_hour": 3}
+        monkeypatch.setattr(
+            scheduler.settings_store, "get", lambda _s, key: values.get(key)
+        )
+        monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)
+
+        # Watch for the job being invoked. Patched before start(), because
+        # add_job stores the function by reference.
+        fired: list[float] = []
+        monkeypatch.setattr(scheduler, "job_sync", lambda: fired.append(1.0))
+        scheduler._fired = fired   # type: ignore[attr-defined]
+
+        started = scheduler.start()
+        assert started is not None, "the scheduler did not start"
+        try:
+            yield scheduler
+        finally:
+            started.shutdown(wait=False)
+            monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)
+
+    def test_starting_up_does_not_actually_run_anything(self, started) -> None:
+        """
+        Asserted by watching for the job to be CALLED, not by reading a clock.
+
+        The obvious version of this test -- "the next run time is more than a
+        minute away" -- passes against the broken code, because by the time it
+        looks the forced run has already fired and the next one is an hour out.
+        The only reliable evidence is whether the work happened.
+        """
+        import time
+
+        time.sleep(1.0)   # long enough for a forced immediate fire to land
+
+        assert started._fired == [], (
+            f"starting the scheduler ran the sync {len(started._fired)} time(s)"
+        )
+
+    def test_the_first_run_lands_on_the_configured_minute(self, started) -> None:
+        """And it is on the grid, not merely delayed by some arbitrary amount."""
+        job = started._scheduler.get_job(started.JOB_SYNC)
+
+        assert job.next_run_time.minute == 30

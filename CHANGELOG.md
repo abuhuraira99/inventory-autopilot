@@ -79,7 +79,7 @@ ruff and mypy all passed over; one was a gate that had never once run.
   asserts the class still refuses unknown attributes, so the same trick cannot be retried
   under a different name.
 
-- **Every restart moved the whole sync timetable.** The interval trigger had no start
+- **Every restart moved the whole sync timetable, and the first fix for it did nothing until a second cause was found.** The interval trigger had no start
   date, so it counted from the moment the process started. Checks landing at 17 past moved
   to 31 past, then to 09 past, then wherever the next restart fell — and a restart looked
   like it had triggered a run of its own. Over a week of updates the timetable wandered
@@ -90,6 +90,19 @@ ruff and mypy all passed over; one was a gate that had never once run.
   are identical after every restart and a restart no longer fires a run. Works for any
   interval, not only hour-divisible ones: 15 minutes with an offset of 10 gives 10, 25, 40
   and 55 past.
+  That was not enough on its own, and the operator reported it back as still broken.
+  `add_job` also passed `next_run_time=datetime.now()`, sitting directly beneath a
+  comment claiming the opposite — *"not immediately on boot"*. So a run fired the
+  instant the process started, and that is only half the damage: once APScheduler has a
+  previous fire time it returns *previous + interval* and never consults the anchor
+  again. One forced first fire therefore re-based the whole timetable on whatever minute
+  the server was restarted — which is why anchoring the trigger changed nothing anyone
+  could see, and why the new setting appeared to be ignored. Removing that line restores
+  what the comment was reaching for, better than it ever worked.
+  The integration test now goes through the real `start()` and watches for the job being
+  *called*. The obvious assertion — that the next run time is far enough away — passes
+  against the broken code, because by the time it looks the forced run has already fired
+  and the next one is an hour out.
 
 - **The vendor connection is no longer held open while feeds are read.** Reading a file
   used to happen inside the open FTP connection, so the control connection sat idle for

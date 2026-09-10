@@ -578,7 +578,7 @@ GET /         -> 307 to /login  (auth enforced)
 
 with the full header set present — `Content-Security-Policy: default-src 'self'`,
 `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
-`Permissions-Policy`. The 327 tests also run on Windows; the suite is developed there.
+`Permissions-Policy`. The 329 tests also run on Windows; the suite is developed there.
 
 There are no POSIX-only calls in `app/` — no `os.fork`, `pwd`, `grp`, `fcntl`, `resource`,
 `signal.SIGKILL`, and no hardcoded absolute paths. Paths are `pathlib` throughout and

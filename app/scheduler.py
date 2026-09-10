@@ -436,10 +436,23 @@ def start() -> BackgroundScheduler | None:
         id=JOB_SYNC,
         name="Check the vendor and sync quantities",
         replace_existing=True,
-        # Not immediately on boot: give the web process a moment to finish
-        # starting, and let an operator pause the system before the first run
-        # if they are mid-deployment.
-        next_run_time=datetime.now(tz).replace(microsecond=0),
+        # NO next_run_time HERE, DELIBERATELY. It used to be set to
+        # datetime.now(), directly under a comment claiming the opposite --
+        # "not immediately on boot". It fired a run the instant the process
+        # started, and that is only half the damage: once APScheduler has a
+        # previous fire time it computes the next one as previous + interval
+        # and stops consulting the trigger's anchor at all. So the entire
+        # timetable re-based itself on whatever minute the server happened to
+        # be restarted, and the "minutes past the hour" setting did nothing
+        # whatsoever. Restarting six times in an evening moved the schedule
+        # six times, and an operator restarting to pick up a change could not
+        # tell that run apart from a real one.
+        #
+        # Left to the trigger, the first fire is the next slot on the anchored
+        # grid -- which also satisfies what that comment was reaching for far
+        # better than firing instantly did: the web process gets time to
+        # finish starting, and there is a window in which to pause the system
+        # mid-deployment.
     )
 
     scheduler.add_job(
