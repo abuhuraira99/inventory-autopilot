@@ -1,23 +1,23 @@
 # Development and test dependencies. Not installed in the production image.
 -r requirements.txt
 
-pytest==8.4.2
-pytest-cov==7.0.0
+pytest==9.1.1
+pytest-cov==7.1.0
 # Runs every docstring example in the codebase as a test. The barcode module in
 # particular documents its rules as doctests, so this keeps the documentation
 # and the behaviour from drifting apart.
-pytest-doctestplus==1.5.0
+pytest-doctestplus==1.7.1
 # In-memory HTTP client for testing FastAPI routes without a live server, and
 # httpx.MockTransport, which is how Amazon is faked: the fake sits under a real
 # SpApiClient, so the rate limiter, the retry logic and the price guard all run
 # for real in tests. Same pin as the runtime requirement.
 httpx[http2]==0.28.1
-ruff==0.14.0
+ruff==0.16.6
 
 # Static type checking. Run over app/ in CI, and it passes cleanly -- which is
 # worth having on a codebase that talks to a paid API: mypy is how you find out
 # that a function can return None before a NoneType error finds it out for you
 # at 3am. Three real defects in this project were first surfaced by it.
-mypy==1.18.2
+mypy==2.3.1
 # paramiko ships no type information of its own.
 types-paramiko==5.0.0.20260724
