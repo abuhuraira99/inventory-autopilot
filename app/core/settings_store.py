@@ -33,6 +33,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import time as dtime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -157,12 +158,18 @@ SPECS: list[Spec] = [
     Spec(
         key="timezone",
         default="America/New_York",
-        value_type="str",
+        value_type="timezone",
         label="Which timezone decides what 'today' means",
         help_text=(
             "Used to work out which feed files belong to today. The vendor puts the "
             "date in the filename (for example FULL_FEED_110708_20260904.zip), so "
-            "this only decides where the day boundary falls."
+            "this only decides where the day boundary falls. SET IT TO THE VENDOR'S "
+            "OWN TIMEZONE, not yours -- that date is the vendor's calendar date, so "
+            "any other zone makes the newest feed look like it belongs to a "
+            "different day, and it gets skipped. Must be a full IANA name with the "
+            "region in front: America/Los_Angeles, America/New_York, Europe/London, "
+            "UTC. A name that does not exist is refused when you save, so it can "
+            "never quietly fall back to a different day."
         ),
         category="schedule",
         sort_order=11,
@@ -723,6 +730,45 @@ DEFAULTS: dict[str, Any] = {s.key: s.default for s in SPECS}
 # Validation
 # ===========================================================================
 
+def _valid_timezone(spec: Spec, name: str) -> str:
+    """
+    Accept only a timezone that really exists, and say so plainly if it does not.
+
+    WHY THIS IS NOT JUST A STRING
+    =============================
+    This one setting decides which feed files count as "today", and every
+    reader of it -- the pipeline, the scheduler, the dashboard -- falls back to
+    a default when the name will not load. That fallback is correct in itself:
+    a mistyped zone must not crash the run. What it must not do is happen
+    silently, and it was.
+
+    The failure it produces is the worst kind. A single mistyped letter is
+    accepted, the fallback moves the day boundary by three hours, the newest
+    full feed is judged to belong to yesterday, and it is skipped -- with no
+    error anywhere, because nothing has actually gone wrong as far as the code
+    is concerned. The catalogue then quietly goes stale. That exact symptom,
+    arrived at by a different route, cost a day of live deployment to find.
+
+    Rejecting the value at the only point where it can enter is the whole fix:
+    an impossible zone can never reach the database, so the fallback can only
+    ever fire for a value that was valid when it was saved and later removed
+    from the system's timezone database -- which is vanishingly rare, and no
+    longer something a typo can cause.
+    """
+    if not name:
+        raise SettingError(f"{spec.label}: cannot be empty")
+    try:
+        ZoneInfo(name)
+    except Exception as exc:
+        raise SettingError(
+            f"{spec.label}: {name!r} is not a timezone this system knows. "
+            f"Use a full name with the region in front, such as "
+            f"America/Los_Angeles, America/New_York, Europe/London or UTC. "
+            f"Capitals and the underscore matter ({exc})."
+        ) from exc
+    return name
+
+
 def _coerce(spec: Spec, raw: Any) -> Any:
     """
     Convert and validate ``raw`` against ``spec``. Raises :class:`SettingError`.
@@ -752,6 +798,8 @@ def _coerce(spec: Spec, raw: Any) -> Any:
             value = float(str(raw).strip())
         elif t == "str":
             value = str(raw).strip()
+        elif t == "timezone":
+            value = _valid_timezone(spec, str(raw).strip())
         elif t == "enum":
             value = str(raw).strip()
             if spec.choices and value not in spec.choices:

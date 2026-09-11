@@ -204,10 +204,16 @@ def today_in(timezone_name: str) -> date:
     """
     Today's calendar date in the configured timezone.
 
-    Uses a real IANA zone (``America/New_York``) rather than a fixed offset, so
-    the day boundary stays correct across the daylight-saving changes in March
-    and November. A hard-coded ``-05:00`` would be wrong for eight months of
-    the year.
+    Takes a real IANA zone name rather than a fixed offset, so the day boundary
+    stays correct across the daylight-saving changes in March and November. A
+    hard-coded ``-05:00`` or ``-08:00`` would be wrong for eight months of the
+    year.
+
+    The zone that matters is the VENDOR'S, because the date being compared was
+    written by the vendor into the filename. It is a setting rather than a
+    constant for exactly that reason -- the deployment discovered the vendor
+    publishes on US Pacific time, not Eastern, and a wrong guess here silently
+    skips the newest full feed instead of failing.
     """
     try:
         tz = ZoneInfo(timezone_name)

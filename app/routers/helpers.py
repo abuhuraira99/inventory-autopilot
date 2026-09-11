@@ -75,14 +75,27 @@ def fmt_duration(seconds: Any) -> str:
     return f"{hours}h {minutes}m"
 
 
-def fmt_datetime(value: Any, tz_name: str = "America/New_York") -> str:
-    """A timestamp in the client's own timezone, labelled."""
+def fmt_datetime(value: Any, tz_name: str | None = None) -> str:
+    """
+    A timestamp in the client's own timezone.
+
+    ``tz_name`` is not optional in practice -- every template passes ``tz``
+    from the settings. It defaults to None rather than to a city because a
+    default city is a lie waiting to happen: it used to be America/New_York,
+    so a caller who forgot the argument would have rendered New York times,
+    correctly formatted and confidently wrong, on a system the client had
+    moved to Los Angeles. Falling back to UTC and SAYING so is worse-looking
+    and much safer -- a visible "UTC" is a question someone asks, and a silent
+    three-hour error is not.
+    """
     if value is None:
         return "—"
     if not isinstance(value, datetime):
         return str(value)
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
+    if not tz_name:
+        return value.strftime("%d %b %Y, %H:%M UTC")
     try:
         local = value.astimezone(ZoneInfo(tz_name))
         return local.strftime("%d %b %Y, %H:%M")

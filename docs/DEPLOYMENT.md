@@ -480,6 +480,30 @@ This path has now been walked end to end on a fresh Windows Server 2016 VPS (4 G
 2 vCPU, 30 GB disk). Read this before you start: none of it is a fault in the
 application, and all of it costs an hour if you meet it cold.
 
+**Set the timezone to the VENDOR'S zone, not yours and not the server's.** The single
+most consequential setting on the page, and the least obvious. The vendor writes its own
+calendar date into every filename (`FULL_FEED_110708_20260904.zip`), and that date is
+what decides whether a file counts as today's. This deployment assumed US Eastern and
+lost a day to it: the full feed for the 8th is published late on the 8th *Pacific* time,
+which is already the 9th in New York, so the newest feed was judged to belong to
+yesterday and skipped — every day, silently, with a completely healthy-looking run.
+Work the zone out from evidence rather than assumption: note the wall-clock time you see
+a new file appear, compare it to the date in its name, and pick the zone in which those
+two agree. Here that was `America/Los_Angeles`.
+
+A name that is not a real timezone is now refused when you save, with the bad value
+quoted back — before that it was accepted and silently ignored, and a single missing
+letter produced exactly the skipped-feed failure above with nothing in any log. Use the
+full IANA name including the region: `America/Los_Angeles`, not `Los_Angeles`, `PST` or
+`GMT-8`.
+
+**Schedule settings apply the moment you save them.** Interval, minutes past the hour,
+catalogue hour and timezone all take effect immediately; the dashboard's "next run" is
+correct as soon as the form comes back. Earlier they waited for the next completed run —
+or, for the nightly jobs, for a restart — which looks exactly like a setting that does
+not work. If a schedule change appears not to land, check the value was actually saved
+before restarting anything.
+
 **Reboot after installing Chocolatey.** Server 2016 ships without .NET Framework 4.8, so
 Chocolatey installs it and cannot finish until Windows restarts. It says so, and it means
 the machine, not the shell: `You need to restart this machine prior to using choco`.
@@ -578,7 +602,7 @@ GET /         -> 307 to /login  (auth enforced)
 
 with the full header set present — `Content-Security-Policy: default-src 'self'`,
 `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
-`Permissions-Policy`. The 332 tests also run on Windows; the suite is developed there.
+`Permissions-Policy`. The 354 tests also run on Windows; the suite is developed there.
 
 There are no POSIX-only calls in `app/` — no `os.fork`, `pwd`, `grp`, `fcntl`, `resource`,
 `signal.SIGKILL`, and no hardcoded absolute paths. Paths are `pathlib` throughout and

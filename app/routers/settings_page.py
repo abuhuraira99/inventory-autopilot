@@ -180,6 +180,21 @@ async def save_settings(
 
     session.commit()
 
+    # APPLY THE SCHEDULE NOW, NOT AFTER THE NEXT RUN.
+    # The scheduler used to re-read these only when a run finished, and the
+    # nightly jobs only when the service restarted. So saving a new check
+    # interval, a new minute past the hour, a new catalogue hour or a new
+    # timezone left the dashboard showing the old "next run" -- for up to a
+    # full interval, or until a restart that nobody had a reason to do. That is
+    # indistinguishable from a setting that does not work, and it wasted real
+    # time on the live deployment before anyone suspected the plumbing rather
+    # than the value. Applied here, the next-run time on the page is correct as
+    # soon as the form comes back. Never raises: a schedule that cannot be
+    # rebuilt must not lose the settings that were just saved.
+    from app import scheduler as sched
+
+    sched.apply_schedule_settings()
+
     if changed == 0:
         return redirect("/settings", flash="Nothing changed.", tone="neutral")
     return redirect(

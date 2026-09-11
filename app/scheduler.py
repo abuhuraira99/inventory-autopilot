@@ -123,7 +123,7 @@ def job_sync() -> None:
                 )
             notifier.flush_queue(session)
 
-    _reschedule_sync_if_needed()
+    apply_schedule_settings()
 
 
 def job_catalog_refresh() -> None:
@@ -380,6 +380,29 @@ def _current_interval_minutes() -> int:
         return int(settings_store.get(session, "sync_interval_minutes") or 60)
 
 
+def _current_catalog_hour() -> int:
+    with session_scope() as session:
+        hour = int(settings_store.get(session, "catalog_refresh_hour") or 3)
+    return max(0, min(23, hour))
+
+
+def _catalog_trigger(hour: int, tz: ZoneInfo) -> CronTrigger:
+    """The nightly catalogue refresh. Defined once, so start() cannot drift."""
+    return CronTrigger(hour=hour, minute=0, timezone=tz)
+
+
+def _digest_trigger(hour: int, tz: ZoneInfo) -> CronTrigger:
+    """
+    The daily summary, an hour and a half after the catalogue refresh starts.
+
+    Derived from the catalogue hour rather than configured separately so the
+    summary always describes a catalogue that has just been refreshed. The
+    :30 is a deliberate gap, not a magic number: it gives the refresh time to
+    finish before the mail that reports on it is built.
+    """
+    return CronTrigger(hour=(hour + 1) % 24, minute=30, timezone=tz)
+
+
 def _reschedule_sync_if_needed() -> None:
     """
     Re-read the interval and reschedule if the client changed it.
@@ -399,24 +422,117 @@ def _reschedule_sync_if_needed() -> None:
     current = getattr(job.trigger, "interval", None)
     current_minutes = int(current.total_seconds() // 60) if current else None
 
-    # THE OFFSET IS CHECKED TOO, AND WAS NOT AT FIRST.
-    # This only compared the interval, so changing "minutes past the hour" on
-    # the dashboard did nothing at all until the next restart -- the running
-    # trigger kept the grid it was built with, and the setting looked hard-coded
-    # to whatever value happened to be saved when the process last started.
-    # Reading it off the live trigger rather than tracking it separately means
-    # there is nothing to keep in step.
+    # EVERY INPUT TO THE TRIGGER IS CHECKED, AND ONLY THE INTERVAL WAS AT FIRST.
+    # Comparing one of the three inputs meant the other two looked hard-coded:
+    # the trigger kept the grid it was built with at start-up, and a change to
+    # "minutes past the hour" -- or to the timezone -- did nothing at all until
+    # the next restart, with no indication why. Reading each value off the live
+    # trigger rather than tracking it separately means there is nothing to keep
+    # in step, and adding a fourth input later cannot silently skip this check.
     start = getattr(job.trigger, "start_date", None)
     current_offset = start.minute if start is not None else None
     wanted_offset = _current_offset_minutes()
 
-    if current_minutes != wanted or current_offset != wanted_offset:
+    current_tz = str(getattr(job.trigger, "timezone", "") or "")
+    wanted_tz = _timezone()
+
+    if (
+        current_minutes != wanted
+        or current_offset != wanted_offset
+        or current_tz != wanted_tz.key
+    ):
         log.info(
-            "sync schedule changed from every %s min at :%s to every %s min at :%s; "
+            "sync schedule changed from every %s min at :%s %s to every %s min at :%s %s; "
             "rescheduling",
-            current_minutes, current_offset, wanted, wanted_offset,
+            current_minutes, current_offset, current_tz,
+            wanted, wanted_offset, wanted_tz.key,
         )
         _scheduler.reschedule_job(JOB_SYNC, trigger=_sync_trigger(wanted))
+
+
+def _reschedule_daily_jobs_if_needed() -> None:
+    """
+    Re-read the catalogue hour and the timezone, and move the nightly jobs.
+
+    THE SAME BUG AS THE SYNC SCHEDULE HAD, IN TWO MORE PLACES.
+    ==========================================================
+    The catalogue refresh and the daily summary were built once, in ``start()``,
+    from ``catalog_refresh_hour`` and the timezone -- and then never looked at
+    again. Nothing re-read them, so both settings behaved exactly the way the
+    sync offset did before it was fixed: editable on the dashboard, saved
+    without complaint, shown back correctly on the page, and completely without
+    effect until somebody happened to restart the service. An operator moving
+    the refresh off a busy hour would have watched it keep running at the old
+    one and reasonably concluded the hour was hard-coded.
+
+    The timezone is the more dangerous of the two, because moving it is exactly
+    what a deployment does when it discovers the vendor is not in the zone
+    everyone assumed. Changing it corrects which files count as "today" on the
+    very next run -- the pipeline re-reads its settings every run -- while the
+    catalogue refresh carried on firing on the old zone's clock. Los Angeles
+    instead of New York moves 3 AM to midnight: still nightly, still plausible
+    in the log, and three hours from where it was asked to be.
+    """
+    global _scheduler
+    if _scheduler is None:
+        return
+
+    tz = _timezone()
+    hour = _current_catalog_hour()
+
+    for job_id, build, wanted_hour in (
+        (JOB_CATALOG, _catalog_trigger, hour),
+        (JOB_DIGEST, _digest_trigger, (hour + 1) % 24),
+    ):
+        job = _scheduler.get_job(job_id)
+        if job is None:
+            continue
+
+        current_hour = _cron_hour(job.trigger)
+        current_tz = str(getattr(job.trigger, "timezone", "") or "")
+        if current_hour == wanted_hour and current_tz == tz.key:
+            continue
+
+        log.info(
+            "%s moved from %s:00 %s to %s:00 %s; rescheduling",
+            job_id, current_hour, current_tz, wanted_hour, tz.key,
+        )
+        _scheduler.reschedule_job(job_id, trigger=build(hour, tz))
+
+
+def _cron_hour(trigger: object) -> int | None:
+    """The hour a cron trigger fires on, or None if it is not that shape."""
+    for field in getattr(trigger, "fields", []) or []:
+        if getattr(field, "name", "") == "hour":
+            try:
+                return int(str(field))
+            except ValueError:  # a range or list -- not something we build
+                return None
+    return None
+
+
+def apply_schedule_settings() -> None:
+    """
+    Make every schedule match the settings as they are right now.
+
+    Called after each run AND the moment the settings form is saved, so a
+    change is visible on the dashboard's "next run" immediately instead of
+    after the next cycle. That matters more than it sounds: with a 60-minute
+    interval, waiting for the next run meant a change made at five past could
+    show no effect until nearly two hours later, which is indistinguishable
+    from the setting being ignored -- and one setting genuinely was.
+
+    Safe to call from a web request. It only ever compares settings against the
+    live triggers and rebuilds the ones that no longer match; it never starts a
+    run, and when the scheduler is disabled it does nothing at all.
+    """
+    if _scheduler is None:
+        return
+    try:
+        _reschedule_sync_if_needed()
+        _reschedule_daily_jobs_if_needed()
+    except Exception:  # pragma: no cover - never break a save over a schedule
+        log.exception("could not apply the schedule settings")
 
 
 def start() -> BackgroundScheduler | None:
@@ -438,8 +554,7 @@ def start() -> BackgroundScheduler | None:
     tz = _timezone()
     interval = _current_interval_minutes()
 
-    with session_scope() as session:
-        catalog_hour = int(settings_store.get(session, "catalog_refresh_hour") or 3)
+    catalog_hour = _current_catalog_hour()
 
     scheduler = BackgroundScheduler(
         timezone=tz,
@@ -483,7 +598,7 @@ def start() -> BackgroundScheduler | None:
 
     scheduler.add_job(
         job_catalog_refresh,
-        trigger=CronTrigger(hour=catalog_hour, minute=0, timezone=tz),
+        trigger=_catalog_trigger(catalog_hour, tz),
         id=JOB_CATALOG,
         name="Refresh the Amazon catalogue",
         replace_existing=True,
@@ -491,7 +606,7 @@ def start() -> BackgroundScheduler | None:
 
     scheduler.add_job(
         job_daily_digest,
-        trigger=CronTrigger(hour=(catalog_hour + 1) % 24, minute=30, timezone=tz),
+        trigger=_digest_trigger(catalog_hour, tz),
         id=JOB_DIGEST,
         name="Send the daily summary",
         replace_existing=True,

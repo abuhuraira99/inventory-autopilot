@@ -14,6 +14,66 @@ not by it failing in production.
 Pre-deployment audit, then the first real deployment onto the Windows VPS. Nothing here
 has run against the live Amazon account yet.
 
+### Fixed — a settings audit, prompted by one setting that looked hard-coded
+
+The operator reported that "Run the check at … minutes past the hour" was being ignored:
+set to 25, the scheduler kept firing at 30. It was **not** hard-coded — the only `30` in
+`app/scheduler.py` is the daily summary's minute — but it behaved exactly as if it were,
+which is the only part that matters to the person using it.
+
+That prompted a sweep for the whole class: **a setting the dashboard accepts, stores and
+redisplays, which nothing afterwards re-reads.** It is a nasty shape of bug because it
+never produces an error. The save succeeds, the page shows the new value, and the system
+carries on as before. Three more instances were found, all in the scheduler.
+
+- **A mistyped timezone was accepted and then silently ignored.** The worst of the group.
+  The field is free text with no dropdown, the operator types it by hand, and it was
+  validated as nothing more than a string. Every reader of it falls back to a default
+  when the name will not load — correct in itself, since a typo must not crash a run —
+  but that fallback moved the day boundary by three hours. The vendor writes its own
+  calendar date into the filename, so the newest full feed would be judged to belong to
+  yesterday and skipped, with no error raised anywhere and the catalogue going quietly
+  stale. One missing letter in `America/Los_Angeles` was enough. The value is now
+  refused at the only point where it can enter, with a message that quotes the bad value
+  back and gives a real example, so the fallback can no longer be reached by a typo.
+  This mattered immediately: the deployment had just discovered the vendor publishes on
+  US Pacific time, not Eastern, and moved the setting.
+
+- **`catalog_refresh_hour` was read once, in `start()`, and never again.** Moving the
+  nightly catalogue refresh off a busy hour saved cleanly, showed the new hour on the
+  page, and changed nothing at all until somebody happened to restart the service.
+
+- **The timezone never reached the running scheduler either.** The pipeline re-reads its
+  settings every run, so "which files count as today" corrected itself immediately —
+  which is precisely what disguised this. The nightly jobs kept firing on the old zone's
+  clock. Los Angeles instead of New York moves a 3 AM refresh to midnight: still nightly,
+  still entirely plausible in the log, and three hours from where it was asked to be.
+
+- **Schedule changes waited for the next run.** Even once the values were re-read, the
+  only thing that re-read them was the end of a sync run. With a 60-minute interval a
+  change saved at five past could show no effect until nearly two hours later — from the
+  dashboard, indistinguishable from a setting that does not work. Saving the form now
+  pushes the schedule straight to the scheduler, so the "next run" time on the page is
+  correct as soon as the form comes back. It never raises: a schedule that cannot be
+  rebuilt must not lose the settings that were just saved.
+
+- **`fmt_datetime` defaulted to `America/New_York`.** Every template passes the configured
+  zone, so nothing was wrong on screen — but a default city in a formatter is a lie
+  waiting for the first caller who forgets the argument, and it would have rendered New
+  York times, correctly formatted and confidently wrong, on a system that had been moved
+  to Los Angeles. It now falls back to UTC *and says UTC*. A visible label is a question
+  somebody asks; a silent three-hour error is not.
+
+Along with the fixes, a standing guard: a test asserts that **every** setting in `SPECS`
+is read by something outside `settings_store.py`. It cannot catch a setting read in the
+wrong place, but it catches the cheapest version — a field offered to the client that no
+code consults at all — and that version is indistinguishable from a working one until
+somebody depends on it.
+
+Also corrected: the docstring in `app/vendor/filename.py` named `America/New_York` as
+though it were the value rather than one example, which was actively misleading once the
+vendor's real zone turned out to be Pacific.
+
 ### Fixed — found by deploying it for real
 
 Everything in this group was invisible until the software was installed on a machine
