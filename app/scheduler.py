@@ -356,12 +356,23 @@ def _sync_trigger(interval_minutes: int) -> IntervalTrigger:
     a run of its own.
     """
     tz = _timezone()
+    midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    anchor = midnight + timedelta(minutes=_current_offset_minutes())
+    return IntervalTrigger(minutes=interval_minutes, start_date=anchor, timezone=tz)
+
+
+def _current_offset_minutes() -> int:
+    """
+    The configured minutes past the hour, clamped to a real minute.
+
+    Its own function so that the trigger builder and the rescheduler below read
+    exactly the same value. When the rescheduler had its own idea of the offset
+    -- or, as it did at first, no idea of it at all -- changing the setting did
+    nothing until the next restart.
+    """
     with session_scope() as session:
         offset = int(settings_store.get(session, "sync_offset_minutes") or 0)
-
-    midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    anchor = midnight + timedelta(minutes=max(0, min(59, offset)))
-    return IntervalTrigger(minutes=interval_minutes, start_date=anchor, timezone=tz)
+    return max(0, min(59, offset))
 
 
 def _current_interval_minutes() -> int:
@@ -388,8 +399,23 @@ def _reschedule_sync_if_needed() -> None:
     current = getattr(job.trigger, "interval", None)
     current_minutes = int(current.total_seconds() // 60) if current else None
 
-    if current_minutes != wanted:
-        log.info("sync interval changed from %s to %s minutes; rescheduling", current_minutes, wanted)
+    # THE OFFSET IS CHECKED TOO, AND WAS NOT AT FIRST.
+    # This only compared the interval, so changing "minutes past the hour" on
+    # the dashboard did nothing at all until the next restart -- the running
+    # trigger kept the grid it was built with, and the setting looked hard-coded
+    # to whatever value happened to be saved when the process last started.
+    # Reading it off the live trigger rather than tracking it separately means
+    # there is nothing to keep in step.
+    start = getattr(job.trigger, "start_date", None)
+    current_offset = start.minute if start is not None else None
+    wanted_offset = _current_offset_minutes()
+
+    if current_minutes != wanted or current_offset != wanted_offset:
+        log.info(
+            "sync schedule changed from every %s min at :%s to every %s min at :%s; "
+            "rescheduling",
+            current_minutes, current_offset, wanted, wanted_offset,
+        )
         _scheduler.reschedule_job(JOB_SYNC, trigger=_sync_trigger(wanted))
 
 

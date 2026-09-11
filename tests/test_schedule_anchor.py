@@ -231,3 +231,79 @@ class TestChangingTheIntervalKeepsTheAnchor:
         finally:
             started.shutdown(wait=False)
             monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)
+
+
+class TestChangingOnlyTheMinuteTakesEffect:
+    """
+    Changing "minutes past the hour" alone must move the schedule.
+
+    The rescheduler originally compared only the interval, so changing just
+    the offset did nothing until the next restart -- the running trigger kept
+    the grid it was built with. From the operator's side that is
+    indistinguishable from the value being hard-coded, and that is exactly
+    what it was reported as.
+    """
+
+    def test_a_new_offset_moves_the_schedule_without_a_restart(
+        self, monkeypatch
+    ) -> None:
+        from app import scheduler
+        from app.config import settings
+
+        monkeypatch.setattr(scheduler, "session_scope", _no_session)
+        monkeypatch.setattr(scheduler, "_timezone", lambda: ZoneInfo("America/Los_Angeles"))
+        monkeypatch.setattr(settings, "enable_scheduler", True, raising=False)
+        monkeypatch.setattr(scheduler, "job_sync", lambda: None)
+        monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)
+
+        values = {"sync_interval_minutes": 60, "sync_offset_minutes": 30, "catalog_refresh_hour": 3}
+        monkeypatch.setattr(scheduler.settings_store, "get", lambda _s, key: values.get(key))
+
+        started = scheduler.start()
+        assert started is not None
+        try:
+            assert started.get_job(scheduler.JOB_SYNC).next_run_time.minute == 30
+
+            # The operator changes only the minute, leaving the interval alone.
+            values["sync_offset_minutes"] = 25
+            scheduler._reschedule_sync_if_needed()
+
+            assert started.get_job(scheduler.JOB_SYNC).next_run_time.minute == 25, (
+                "the offset change was ignored, as it was when the rescheduler "
+                "compared only the interval"
+            )
+        finally:
+            started.shutdown(wait=False)
+            monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)
+
+    def test_an_unchanged_schedule_is_not_rescheduled(self, monkeypatch) -> None:
+        """
+        Nothing changed means nothing moves.
+
+        Rescheduling unnecessarily would recompute the next fire time after
+        every single run, which on a 60-minute interval could quietly push the
+        next check up to an hour later each time.
+        """
+        from app import scheduler
+        from app.config import settings
+
+        monkeypatch.setattr(scheduler, "session_scope", _no_session)
+        monkeypatch.setattr(scheduler, "_timezone", lambda: ZoneInfo("America/Los_Angeles"))
+        monkeypatch.setattr(settings, "enable_scheduler", True, raising=False)
+        monkeypatch.setattr(scheduler, "job_sync", lambda: None)
+        monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)
+
+        values = {"sync_interval_minutes": 60, "sync_offset_minutes": 15, "catalog_refresh_hour": 3}
+        monkeypatch.setattr(scheduler.settings_store, "get", lambda _s, key: values.get(key))
+
+        started = scheduler.start()
+        assert started is not None
+        try:
+            before = started.get_job(scheduler.JOB_SYNC).next_run_time
+
+            scheduler._reschedule_sync_if_needed()
+
+            assert started.get_job(scheduler.JOB_SYNC).next_run_time == before
+        finally:
+            started.shutdown(wait=False)
+            monkeypatch.setattr(scheduler, "_scheduler", None, raising=False)

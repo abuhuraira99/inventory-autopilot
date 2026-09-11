@@ -37,6 +37,7 @@ import zipfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -136,12 +137,24 @@ def _accept(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.fixture
-def feed_archive(tmp_path) -> Path:
+def feed_archive(tmp_path, session) -> Path:
     """
-    A full feed named for today, because the "today only" rule reads the date
-    out of the filename rather than trusting a server clock.
+    A full feed named for today **in the timezone the pipeline uses**.
+
+    The "today only" rule reads the date out of the filename and compares it
+    against the ``timezone`` setting, not against UTC. This fixture used to
+    name the file for UTC today, so for the four hours each day when UTC has
+    rolled over and New York has not, every test using it failed: the file was
+    correctly skipped as "not today's", the run read nothing, and eight tests
+    that have nothing to do with dates reported nonsense.
+
+    A suite that fails for four hours out of twenty-four, on a schedule nobody
+    has written down, is worse than one that fails always -- it trains people
+    to re-run and shrug. Derived from the same setting the code reads, so the
+    two cannot drift apart again.
     """
-    today = datetime.now(UTC).strftime("%Y%m%d")
+    tz = ZoneInfo(str(settings_store.get(session, "timezone") or "America/New_York"))
+    today = datetime.now(tz).strftime("%Y%m%d")
     path = tmp_path / f"FULL_FEED_110708_{today}.zip"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("feed.txt", "\n".join([HEADER, *ROWS]) + "\n")
