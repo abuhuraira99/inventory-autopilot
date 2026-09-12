@@ -411,7 +411,17 @@ class TestVerification:
         zero-padding rule is about. Trusting the acceptance is how this account
         came to have 38,341 quantities out of step while its tooling reported
         success every day.
+
+        The batch is aged past ``VERIFY_CONFIRM_DEADLINE`` because that is what
+        distinguishes this from Amazon merely being slow: a change still absent
+        hours later has genuinely not been applied. See
+        :class:`TestAmazonTakesItsTimeToApplyAChange` for the other half.
         """
+        from datetime import timedelta
+
+        from app.engine.pusher import VERIFY_CONFIRM_DEADLINE
+        from app.models import utcnow
+
         def handler(request: httpx.Request) -> httpx.Response:
             if request.method == "GET":
                 # Amazon still shows the old number: the change did not stick.
@@ -422,6 +432,8 @@ class TestVerification:
         batch = create_batch(session, run.id, decisions)
         client = _client(handler)
         send_batch(session, client, batch, decisions_by_sku={d.seller_sku: d for d in decisions})
+        batch.sent_at = utcnow() - VERIFY_CONFIRM_DEADLINE - timedelta(minutes=1)
+        session.flush()
 
         summary = verify_batch(session, client, batch, settle_seconds=0)
 
@@ -837,3 +849,103 @@ class TestPracticeModeCanStillAskForAReport:
         for operation in READ_ONLY_WRITE_OPERATIONS:
             assert not operation.startswith("listings."), operation
             assert not operation.startswith("feeds."), operation
+
+
+# ===========================================================================
+# Eventual consistency
+# ===========================================================================
+
+
+class TestAmazonTakesItsTimeToApplyAChange:
+    """
+    THE FALSE FAILURE -- the mirror image of :meth:`TestVerification.
+    test_accepted_but_not_applied_is_caught`.
+
+    Amazon's Listings Items API is eventually consistent. A patch it answers
+    ACCEPTED can take many minutes to show up on a read-back, and the read-back
+    ran 30 seconds after the send.
+
+    On 12 September 2026 the first live batch -- 25 products going off sale --
+    was reported as "did not take effect" on every single row. Every one of the
+    25 had in fact been applied; Seller Central showed 0 for all of them when
+    the operator checked by hand shortly afterwards.
+
+    Reporting that as failure is wrong twice over:
+
+      * it tells the operator the system is broken at the exact moment it is
+        working, which is how a person learns to distrust a correct alarm; and
+      * it marks every item NOT_APPLIED, which queues all 25 to be sent again
+        on the next run -- writes to a live account that are not needed.
+
+    "Not confirmed yet" and "confirmed wrong" are different facts and must not
+    share a status.
+    """
+
+    def test_a_change_amazon_has_not_applied_yet_is_not_called_a_failure(
+        self, session, run, listings
+    ):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                # Amazon has taken the patch but not applied it yet.
+                return httpx.Response(200, json=_listing_body(7))
+            return _accept_everything(request)
+
+        decisions = [_decision("HA-AMS-0008811065126", now=7, want=0)]
+        batch = create_batch(session, run.id, decisions)
+        client = _client(handler)
+        send_batch(session, client, batch, decisions_by_sku={d.seller_sku: d for d in decisions})
+
+        summary = verify_batch(session, client, batch, settle_seconds=0)
+
+        item = session.execute(
+            select(PushItem).where(PushItem.batch_id == batch.id)
+        ).scalar_one()
+
+        # The heart of it: a read-back this soon proves nothing either way.
+        assert item.result is not ItemResult.NOT_APPLIED
+        assert summary.not_applied == 0
+        assert summary.pending_confirmation == 1
+
+        # It is emphatically not "verified" either -- we still do not know.
+        assert batch.status is not BatchStatus.VERIFIED
+        assert summary.verified == 0
+
+        # And it must not be queued for a pointless resend.
+        from app.engine.pusher import collect_retries
+
+        assert "HA-AMS-0008811065126" not in collect_retries(session)
+
+    def test_a_change_still_missing_long_afterwards_is_a_real_failure(
+        self, session, run, listings
+    ):
+        """
+        The deadline is the other half. Left open for ever, "not confirmed yet"
+        would hide the genuine silent failure this system exists to catch.
+        """
+        from datetime import timedelta
+
+        from app.models import utcnow
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json=_listing_body(7))
+            return _accept_everything(request)
+
+        decisions = [_decision("HA-AMS-0008811065126", now=7, want=0)]
+        batch = create_batch(session, run.id, decisions)
+        client = _client(handler)
+        send_batch(session, client, batch, decisions_by_sku={d.seller_sku: d for d in decisions})
+
+        # Pretend the send happened long enough ago that Amazon has had every
+        # reasonable chance to apply it.
+        batch.sent_at = utcnow() - timedelta(hours=6)
+        session.flush()
+
+        summary = verify_batch(session, client, batch, settle_seconds=0)
+
+        item = session.execute(
+            select(PushItem).where(PushItem.batch_id == batch.id)
+        ).scalar_one()
+        assert item.result is ItemResult.NOT_APPLIED
+        assert summary.not_applied == 1
+        assert "still shows 7" in (item.amazon_message or "")

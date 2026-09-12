@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
@@ -56,7 +57,27 @@ DEFAULT_FEEDS_THRESHOLD = 500
 
 #: Amazon needs a moment before a change is readable. Measured informally at a
 #: few seconds; 20 is comfortable without making a run feel stuck.
+#:
+#: This is a courtesy pause, NOT a guarantee. See VERIFY_CONFIRM_DEADLINE below:
+#: a change still missing when this pause ends has not failed, it is merely
+#: unconfirmed, and waiting longer here is not the answer -- verification runs
+#: inside the operator's approve request, so a multi-minute sleep would hang the
+#: browser on every approval.
 VERIFY_SETTLE_SECONDS = 20
+
+#: How long Amazon gets to apply an accepted change before we are willing to
+#: call it a failure.
+#:
+#: Amazon's Listings Items API is eventually consistent: ACCEPTED means "queued",
+#: not "done". On 12 September 2026 a live batch of 25 was declared "did not take
+#: effect" 30 seconds after sending and all 25 had in fact been applied -- the
+#: operator confirmed 0 in Seller Central by hand. Treating an early read-back as
+#: proof of failure produced 25 false alarms and queued 25 needless resends.
+#:
+#: Six hours is deliberately generous. The cost of waiting is a row that says
+#: "not confirmed yet" for a while; the cost of being hasty is crying wolf about
+#: a live account, which is how an operator learns to ignore a real alarm.
+VERIFY_CONFIRM_DEADLINE = timedelta(hours=6)
 
 #: Verifying 5,000 SKUs individually would cost 5,000 GET requests. For large
 #: batches we verify a random sample and rely on the next catalogue refresh for
@@ -76,6 +97,10 @@ class PushSummary:
     rejected: int = 0
     verified: int = 0
     not_applied: int = 0
+    #: Sent and accepted, but Amazon had not applied it yet when we looked.
+    #: Not a failure and not a success -- a question still open. Kept apart from
+    #: ``not_applied`` so the dashboard never calls a working change broken.
+    pending_confirmation: int = 0
     errors: list[str] = field(default_factory=list)
     #: Amazon error codes and how often each occurred, so a recurring
     #: catalogue problem is visible rather than buried in per-SKU rows.
@@ -426,23 +451,35 @@ def verify_batch(
                 # Keep our picture of Amazon in step with reality.
                 listing.quantity = actual
                 listing.synced_at = utcnow()
+        elif utcnow() - (batch.sent_at or batch.created_at) < VERIFY_CONFIRM_DEADLINE:
+            # Sent recently. Amazon accepted it and simply has not applied it
+            # yet -- that is normal, not a fault. Leave the item ACCEPTED, which
+            # already means "Amazon took it, and we have not confirmed it", and
+            # look again on a later run. Calling this a failure here is what
+            # produced 25 false alarms on 12 September 2026.
+            item.amazon_message = (
+                f"Sent {item.new_quantity}; Amazon still showed {actual} when checked. "
+                "Amazon applies these in its own time, so this is not yet a failure. "
+                "It will be checked again on a later run."
+            )
+            summary.pending_confirmation += 1
         else:
             item.result = ItemResult.NOT_APPLIED
             item.amazon_message = (
-                f"Sent {item.new_quantity} but Amazon still shows {actual}. "
-                "Recorded for retry on the next run."
+                f"Sent {item.new_quantity} but Amazon still shows {actual}, "
+                "long after it accepted the change. Recorded for retry."
             )
             summary.not_applied += 1
 
     batch.verified_count = summary.verified
     batch.verified_at = utcnow()
-    if summary.not_applied == 0 and not summary.errors:
+    if summary.not_applied == 0 and summary.pending_confirmation == 0 and not summary.errors:
         batch.status = BatchStatus.VERIFIED
     session.flush()
 
     log.info(
-        "batch %d verified: %d confirmed, %d did not stick%s",
-        batch.id, summary.verified, summary.not_applied,
+        "batch %d verified: %d confirmed, %d did not stick, %d not yet applied by Amazon%s",
+        batch.id, summary.verified, summary.not_applied, summary.pending_confirmation,
         " (sampled)" if summary.verification_sampled else "",
     )
     return summary

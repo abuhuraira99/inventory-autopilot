@@ -283,6 +283,7 @@ def execute_run(
         # actually achieved.
         if client is not None:
             _recover_interrupted_batches(session, run, client, cfg, outcome)
+            _confirm_unconfirmed_batches(session, client, outcome)
 
         # ---- stages 1-3: the vendor side --------------------------------
         processed_files, parse_stats, touched = _ingest(
@@ -681,6 +682,65 @@ def _housekeeping(session: Session, run: Run, cfg: dict, outcome: RunOutcome) ->
 # ===========================================================================
 # Stage 0: recovery
 # ===========================================================================
+
+def _confirm_unconfirmed_batches(
+    session: Session,
+    client: SpApiClient,
+    outcome: RunOutcome,
+) -> None:
+    """
+    Look again at changes Amazon accepted but had not applied when we checked.
+
+    WHY THIS EXISTS
+    ===============
+    Amazon's Listings Items API is eventually consistent. ``verify_batch`` reads
+    back ~20 seconds after sending, which is long enough for most changes and
+    nowhere near long enough for all of them. An item still showing the old
+    quantity at that moment is left ACCEPTED rather than condemned as
+    NOT_APPLIED -- see ``VERIFY_CONFIRM_DEADLINE`` in
+    :mod:`app.engine.pusher` and the incident it records.
+
+    That honesty only works if somebody comes back to look. Without this, an
+    item that Amazon applied a minute after we looked would sit at ACCEPTED for
+    ever: never confirmed, never counted, and never visible as a real failure if
+    it genuinely had not applied.
+
+    Waiting longer inside the approve request is not an alternative.
+    Verification runs inline in the operator's HTTP request, so a multi-minute
+    sleep would hang the browser on every approval.
+
+    WHY settle_seconds=0
+    ====================
+    These batches were sent at least one run ago. Amazon has had its time; the
+    pause exists only to cushion a read that follows a write immediately.
+    """
+    unconfirmed = list(
+        session.execute(
+            select(PushBatch)
+            .where(PushBatch.status == BatchStatus.SENT)
+            .join(PushItem, PushItem.batch_id == PushBatch.id)
+            .where(PushItem.result == ItemResult.ACCEPTED)
+            .distinct()
+        ).scalars()
+    )
+    if not unconfirmed:
+        return
+
+    for batch in unconfirmed:
+        try:
+            summary = verify_batch(session, client, batch, settle_seconds=0)
+        except SpApiError as exc:
+            # Cannot reach Amazon. Leave the batch alone and try next run --
+            # an unreachable API is not evidence that a change failed.
+            log.warning("could not confirm batch %d: %s", batch.id, exc)
+            outcome.errors.append(f"batch {batch.id} could not be confirmed: {exc}")
+            continue
+
+        log.info(
+            "batch %d re-checked: %d now confirmed, %d still waiting, %d did not stick",
+            batch.id, summary.verified, summary.pending_confirmation, summary.not_applied,
+        )
+
 
 def _recover_interrupted_batches(
     session: Session,

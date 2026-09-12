@@ -5,7 +5,75 @@ Notable changes, newest first. Dates are the date of the work.
 This file leads with the defects rather than the features, because on a system that
 writes to a live seller account the interesting history is what was wrong and how it
 was found. Every entry below was found by reading the code or by writing a test for it,
-not by it failing in production.
+not by it failing in production — with one exception, the 12 September 2026 entry, which
+the first live batch found for us. Each one was then proven by a test that failed against
+the unfixed code before it was fixed.
+
+---
+
+## [Unreleased] — 12 September 2026
+
+The first real writes to the live Amazon account, and the first defect found by the
+system running rather than by reading it.
+
+### Fixed — "did not take effect" on 25 changes that had all taken effect
+
+Test 4 of the rollout: 25 products taken off sale, in "ask first" mode, approved by
+hand. Amazon accepted all 25 and rejected none. The dashboard then reported **"DID NOT
+TAKE EFFECT" on every single row**, with "Amazon still shows 1" against each one.
+
+Every one of the 25 had in fact been applied. The operator checked Seller Central by
+hand and found `Available (FBM) = 0` on all of them.
+
+The log gives the whole story in two lines:
+
+```
+09:33:06  batch 73 sent: 25 accepted, 0 rejected
+09:33:36  batch 73 verified: 0 confirmed, 25 did not stick
+```
+
+Thirty seconds. `verify_batch` waited `VERIFY_SETTLE_SECONDS = 20`, read each SKU back,
+found the old quantity still there, and recorded that as proof of failure.
+
+It is not proof of anything. Amazon's Listings Items API is eventually consistent:
+`ACCEPTED` means *queued*, not *done*, and the delay is measured in minutes, not
+seconds. The 20-second pause was described in the code as the time Amazon "needs"; it
+was only ever the time Amazon usually takes.
+
+**This is the mirror image of the silent-failure bug this project already guards
+against**, and it is nearly as damaging. That one reports success and changes nothing.
+This one reports failure while working perfectly — which teaches the operator that a
+red row means nothing, on the one system where a red row has to mean something. It also
+marked all 25 `NOT_APPLIED`, which queued all 25 to be sent again on the next run:
+needless writes to a live account, forever, on changes that were already correct.
+
+The fix separates two facts that were sharing a status:
+
+- **Not confirmed yet.** Amazon accepted it and has not applied it yet. The item stays
+  `ACCEPTED` — the enum already meant exactly this: "Amazon took it, and we have not
+  confirmed it". It is counted as `pending_confirmation`, never as a failure, and it is
+  not queued for retry.
+- **Confirmed wrong.** Still missing after `VERIFY_CONFIRM_DEADLINE` (six hours). Now,
+  and only now, `NOT_APPLIED`.
+
+A SKU that cannot be read back at all is unchanged: that stays an immediate
+`NOT_APPLIED`, because a 404 really is evidence, straight away.
+
+Waiting longer in place was not an option and is worth recording as a rejected fix:
+verification runs inline inside the operator's approve request, so a multi-minute sleep
+would hang the browser on every approval. The answer is to look **again later**, not to
+look **harder now**. `_confirm_unconfirmed_batches` runs in stage 0 of every run and
+re-checks any `SENT` batch still holding accepted-but-unconfirmed items, with
+`settle_seconds=0` because those batches are at least a run old.
+
+A batch is no longer marked `VERIFIED` while anything in it is still unconfirmed. It
+previously could be, since the check was only `not_applied == 0`.
+
+Two regression tests, both run against the unfixed code first and watched to fail:
+`test_a_change_amazon_has_not_applied_yet_is_not_called_a_failure` and
+`test_a_change_still_missing_long_afterwards_is_a_real_failure`. The existing
+`test_accepted_but_not_applied_is_caught` now ages the batch past the deadline, which
+is what actually distinguishes a genuine silent failure from Amazon being slow.
 
 ---
 

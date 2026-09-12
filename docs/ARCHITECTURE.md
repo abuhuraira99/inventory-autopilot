@@ -388,7 +388,7 @@ column name and turns `seller-sku` into `﻿seller-sku` — silently breaking a 
 
 ## Testing
 
-354 tests, ~69% coverage, mypy clean. **No network, no live database.** A test that could
+356 tests, ~69% coverage, mypy clean. **No network, no live database.** A test that could
 reach Amazon is a test that could change a live listing, and that must not exist in a CI
 pipeline. Anything needing a live service is `@pytest.mark.integration` and excluded by
 default.
