@@ -53,10 +53,9 @@
        ================================================================ #}
     <form method="post" action="/settings" data-dirty-guard>
 
-      <div class="md-row md-row--between mb-2" style="position:sticky;top:76px;z-index:20;
-           background:var(--md-surface);padding:10px 0">
-        <span class="md-body-small md-muted" data-dirty-indicator hidden>
-          You have unsaved changes.
+      <div class="actionbar">
+        <span class="actionbar__status" data-dirty-indicator hidden>
+          <span class="actionbar__dot"></span>You have unsaved changes.
         </span>
         <div class="md-spacer"></div>
         <button class="md-btn md-btn--filled" type="submit">Save all settings</button>

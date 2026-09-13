@@ -444,3 +444,173 @@
     border-left: none; width: 100%; justify-content: center;
   }
 }
+
+/* ==========================================================================
+   REFINEMENT LAYER
+   ==========================================================================
+
+   One pass over the things that read as unfinished, rather than another patch
+   on each. Three ideas run through all of it:
+
+     1. SEPARATE WITH TONE, NOT LINE. A border is a statement; a half-step of
+        surface tone is a whisper. Most of the boxes here were doing with a
+        1px outline what a background shift does more quietly.
+     2. ONE VERTICAL RHYTHM. Rows, controls and gaps land on the same scale,
+        so two tables side by side end level without being told to.
+     3. MOTION ONLY WHERE A FINGER IS. 150ms, ease-out, on hover and focus.
+        Nothing animates on load; nothing bounces.
+   ========================================================================== */
+
+:root {
+  --rhythm-row: 3.5rem;          /* 56px: one table row, both tables */
+  --rhythm-control: 2.5rem;      /* 40px: compact control height */
+  --ease-ui: cubic-bezier(.2, 0, 0, 1);
+  --dur-ui: 150ms;
+}
+
+/* --------------------------------------------------------------------------
+   The settings action bar
+   --------------------------------------------------------------------------
+   Was a full-bleed sticky row painted with the page background and holding a
+   single right-aligned button, so two thirds of it was an opaque blank band
+   travelling over the content as you scrolled -- reported, correctly, as "a
+   div making whitespace". It is now chrome that looks deliberate: a contained
+   bar that frosts what passes beneath it, with a hairline that only appears
+   once there is something underneath to separate it from.
+-------------------------------------------------------------------------- */
+.actionbar {
+  position: sticky;
+  top: 4.75rem;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding: .625rem 1rem;
+  border-radius: var(--md-shape-full);
+  /* Opaque first, translucent second. A browser without color-mix drops the
+     second declaration and keeps a solid bar; without the fallback it would
+     drop to transparent and the content would scroll straight through it,
+     which is worse than the blank band this replaces. */
+  background: var(--md-surface-container-low);
+  background: color-mix(in srgb, var(--md-surface) 82%, transparent);
+  border: 1px solid var(--md-outline-variant);
+  box-shadow: var(--md-elev-1);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  backdrop-filter: saturate(180%) blur(12px);
+}
+
+.actionbar__status {
+  display: inline-flex; align-items: center; gap: .5rem;
+  color: var(--md-on-surface-variant);
+  font: 500 .8125rem/1.25rem var(--md-font);
+}
+.actionbar__dot {
+  width: .5rem; height: .5rem; border-radius: 50%;
+  background: var(--md-warning);
+  flex: none;
+}
+
+/* --------------------------------------------------------------------------
+   Tables
+   --------------------------------------------------------------------------
+   The header was already sticky and now has something to stick to, but it sat
+   flat on the rows below it and read as a band of grey rather than a pinned
+   header. It now carries a hairline and, once the body is scrolled, a soft
+   shadow -- the cue that says "this is held in place" instead of "this is a
+   coloured row".
+-------------------------------------------------------------------------- */
+.md-table thead th {
+  background: var(--md-surface-container);
+  background: color-mix(in srgb, var(--md-surface-container) 92%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--md-outline-variant);
+  box-shadow: 0 1px 0 var(--md-outline-variant);
+  letter-spacing: .06em;          /* relaxed, because it is all-caps */
+  font-size: .6875rem;
+}
+.md-table tbody tr {
+  transition: background var(--dur-ui) var(--ease-ui);
+}
+.md-table tbody td {
+  border-bottom: 1px solid var(--md-outline-variant);
+  border-bottom-color: color-mix(in srgb, var(--md-outline-variant) 55%, transparent);
+}
+.md-table tbody tr:hover { background: var(--md-surface-container-low); }
+
+/* One row height across the dashboard's two tables. They hold the same number
+   of rows but different line counts, so one ended 120px short of the other and
+   the difference showed as dead space under the shorter one. Matching the
+   rhythm makes them end level without either being stretched. */
+.dash-table tbody tr { height: var(--rhythm-row); }
+.dash-table tbody td { padding-top: .5rem; padding-bottom: .5rem; }
+
+/* The scrollbar inside a table is part of the furniture now, not an artefact. */
+.md-table-wrap { scrollbar-width: thin; scrollbar-color: var(--md-outline-variant) transparent; }
+.md-table-wrap::-webkit-scrollbar { width: .625rem; height: .625rem; }
+.md-table-wrap::-webkit-scrollbar-track { background: transparent; }
+.md-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--md-outline-variant);
+  border: .1875rem solid var(--md-surface-container-lowest);
+  border-radius: var(--md-shape-full);
+}
+.md-table-wrap::-webkit-scrollbar-thumb:hover { background: var(--md-outline); }
+
+/* --------------------------------------------------------------------------
+   The pager
+   --------------------------------------------------------------------------
+   The jump box inherited the full-size form input -- 48px tall and full width
+   before being clamped -- which made a secondary control the loudest thing on
+   the page. It is a compact, tabular field sitting quietly beside the buttons.
+-------------------------------------------------------------------------- */
+.pager {
+  margin-top: 1.5rem;
+  padding: .75rem 1rem;
+  gap: .75rem;
+  border-radius: var(--md-shape-full);
+  background: var(--md-surface-container-low);
+}
+.pager__info {
+  font: 500 .8125rem/1.25rem var(--md-font);
+  letter-spacing: .01em;
+  padding: 0 .25rem;
+}
+.pager__jump { gap: .5rem; margin-left: .75rem; padding-left: .75rem; }
+.pager__jump-label { font-size: .8125rem; gap: .5rem; }
+.pager__jump-input {
+  width: 4.5rem;
+  min-height: var(--rhythm-control);
+  padding: 0 .75rem;
+  text-align: center;
+  border-radius: var(--md-shape-full);
+  font: 500 .875rem/1 var(--md-font);
+  font-variant-numeric: tabular-nums;
+}
+/* The spinner arrows are noise at this size. */
+.pager__jump-input::-webkit-outer-spin-button,
+.pager__jump-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pager__jump-input { -moz-appearance: textfield; appearance: textfield; }
+.pager .md-btn--small { min-height: var(--rhythm-control); }
+
+/* --------------------------------------------------------------------------
+   Focus, and the small motions
+   --------------------------------------------------------------------------
+   One focus treatment everywhere, visible against every surface, and never a
+   transition longer than a gesture.
+-------------------------------------------------------------------------- */
+.md-btn, .md-chip, .pager__jump-input, .settings-nav a {
+  transition: background var(--dur-ui) var(--ease-ui),
+              color var(--dur-ui) var(--ease-ui),
+              border-color var(--dur-ui) var(--ease-ui),
+              box-shadow var(--dur-ui) var(--ease-ui);
+}
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+  border-radius: var(--md-shape-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 1ms !important; animation-duration: 1ms !important; }
+}
