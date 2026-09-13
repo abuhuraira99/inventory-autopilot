@@ -478,31 +478,41 @@
    bar that frosts what passes beneath it, with a hairline that only appears
    once there is something underneath to separate it from.
 -------------------------------------------------------------------------- */
+/* Just the button, floating. No bar around it.
+   Every earlier attempt kept a surface behind this row -- first the page
+   background, then a frosted pill -- and each one showed as a pale slab
+   spreading out from the button across the page, because the row is full width
+   and the button is the only thing in it. There is nothing to be gained by
+   painting that emptiness: the row hugs its contents, sits at the right, and
+   carries no background, border or shadow of its own. The button provides its
+   own. */
 .actionbar {
   position: sticky;
   top: 4.75rem;
   z-index: 20;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 1rem;
+  width: fit-content;
+  margin-left: auto;
   margin-bottom: 1.5rem;
-  padding: .625rem 1rem;
-  border-radius: var(--md-shape-full);
-  /* Opaque first, translucent second. A browser without color-mix drops the
-     second declaration and keeps a solid bar; without the fallback it would
-     drop to transparent and the content would scroll straight through it,
-     which is worse than the blank band this replaces. */
-  background: var(--md-surface-container-low);
-  background: color-mix(in srgb, var(--md-surface) 82%, transparent);
-  border: 1px solid var(--md-outline-variant);
-  box-shadow: var(--md-elev-1);
-  -webkit-backdrop-filter: saturate(180%) blur(12px);
-  backdrop-filter: saturate(180%) blur(12px);
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
 }
 
+/* The one thing that still needs a surface, and only while it is visible:
+   the row no longer has a background, so this would otherwise be loose text
+   sliding over the settings behind it. A chip around the words, not a bar
+   across the page. */
 .actionbar__status {
   display: inline-flex; align-items: center; gap: .5rem;
-  color: var(--md-on-surface-variant);
+  padding: .375rem .75rem;
+  border-radius: var(--md-shape-full);
+  background: var(--md-warning-container);
+  color: var(--md-on-warning-container);
   font: 500 .8125rem/1.25rem var(--md-font);
 }
 .actionbar__dot {
