@@ -61,6 +61,17 @@ router = APIRouter(tags=["dashboard"])
 
 PAGE_SIZE = 50
 
+#: Rows in each of the two side-by-side tables on the status page.
+#:
+#: ONE constant, deliberately, because they sit beside each other and the eye
+#: reads them as a pair. They were 12 and 10, so the shorter table stopped two
+#: rows early and left a slab of empty card beneath it -- reported twice, and
+#: fixed twice in CSS before the cause turned out to be arithmetic rather than
+#: layout. Nothing can be made to fill a gap it has no rows for. Keep them
+#: equal; if one ever needs its own count, it needs its own constant and a
+#: reason written here.
+STATUS_TABLE_ROWS = 12
+
 
 # ===========================================================================
 # Home
@@ -113,7 +124,7 @@ async def home(
     ).scalar_one_or_none()
 
     recent_runs = list(
-        session.execute(select(Run).order_by(desc(Run.started_at)).limit(12)).scalars()
+        session.execute(select(Run).order_by(desc(Run.started_at)).limit(STATUS_TABLE_ROWS)).scalars()
     )
 
     last_catalog = session.execute(
@@ -125,7 +136,7 @@ async def home(
 
     recent_files = list(
         session.execute(
-            select(FeedFile).order_by(desc(FeedFile.discovered_at)).limit(10)
+            select(FeedFile).order_by(desc(FeedFile.discovered_at)).limit(STATUS_TABLE_ROWS)
         ).scalars()
     )
 
