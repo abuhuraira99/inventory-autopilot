@@ -37,7 +37,12 @@
 <div class="md-grid md-grid--3 mb-3">
   {% for kind, title in titles.items() %}
     {% set report = newest.get(kind) %}
-    <div class="md-card {{ 'md-card--elevated' if kind in ['in_stock', 'new_products'] else 'md-card--outlined' }}">
+    {# One card treatment for all five. Two of them used to be elevated and the
+       other three outlined, which read as two important cards and three
+       afterthoughts -- a difference of weight and colour carrying meaning that
+       the "Used daily by the team" pill below already states in words. The pill
+       is kept; the cards are now peers. #}
+    <div class="md-card md-card--outlined md-card--equal">
       <div class="md-card__body">
         <div class="md-row md-row--between" style="align-items:flex-start">
           <div class="md-grow">

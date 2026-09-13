@@ -300,9 +300,28 @@ def execute_run(
         # and reprocessed on every subsequent cycle.
         checkpoint(session, f"run {run.id} vendor data stored")
 
-        # A full feed among the processed files means reconcile everything.
+        # Every run reconciles the whole in-scope catalogue.
+        #
+        # This used to be `force_full_reconcile or saw_full_feed`: only a run
+        # that had just read a full feed re-decided everything, and an ordinary
+        # delta run looked solely at the barcodes that delta mentioned. That is
+        # fine until a run hits `max_changes_per_run`, and then it is not,
+        # because the leftovers are NOT stored anywhere -- `deferred` is a
+        # counter and nothing else. So a full feed proposing 38,000 changes sent
+        # 5,000 and the other 33,000 simply evaporated: the delta runs that
+        # followed could not see them, and they waited for the NEXT full feed,
+        # a day later. At 5,000 a day a backlog like that takes over a week,
+        # while the settings page cheerfully said "about eight runs". The
+        # operator had been clearing it by hand with "Reconcile everything",
+        # which is exactly the symptom.
+        #
+        # Reconciling every run costs one pass over ~45,000 in-scope listings,
+        # which is seconds, and no extra Amazon requests at all -- decisions are
+        # made against the stored catalogue picture. The change limit and every
+        # guardrail still apply, so a run is no larger or riskier than before;
+        # there are simply no longer changes that nothing will ever propose.
         saw_full_feed = any(f.kind is FeedKind.FULL for f in processed_files)
-        reconcile = force_full_reconcile or saw_full_feed
+        reconcile = True
 
         # ---- reports, regardless of whether Amazon is configured --------
         _write_reports(session, run, cfg, processed_files, touched, outcome)
@@ -322,7 +341,8 @@ def execute_run(
 
         # ---- stages 4-6: Amazon's side, matching, deciding ---------------
         decisions, index, mapper, engine = _decide(
-            session, run, cfg, touched, reconcile, outcome
+            session, run, cfg, touched, reconcile, outcome,
+            allow_dropped=(saw_full_feed or force_full_reconcile),
         )
 
         if not decisions:
@@ -1331,8 +1351,20 @@ def _decide(
     touched: dict[str, tuple[int, int | None]],
     reconcile: bool,
     outcome: RunOutcome,
+    *,
+    allow_dropped: bool = False,
 ) -> tuple[list[Decision], CatalogIndex, Mapper, DecisionEngine]:
-    """Stages 4, 5 and 6."""
+    """
+    Stages 4, 5 and 6.
+
+    ``reconcile`` decides WHICH barcodes are re-decided. ``allow_dropped``
+    decides whether a product may be taken off sale for being absent from the
+    vendor entirely. They were one flag, and separating them is the whole point:
+    re-deciding the backlog every run is safe, while treating absence as "the
+    vendor has dropped this" is only safe after a real full feed. Absence from a
+    delta means "unchanged", never "gone" -- keeping those two ideas in one
+    boolean is how a delta run could have started zeroing the catalogue.
+    """
     prefixes = list(cfg["sku_prefixes_in_scope"])
     blacklist = list(cfg["blacklisted_skus"])
 
@@ -1401,7 +1433,9 @@ def _decide(
         decisions.append(engine.decide(match, stock, product_format=fmt))
 
     # ---- products the vendor has dropped -------------------------------
-    if reconcile:
+    # Gated on a full feed, NOT on `reconcile`. See the docstring: a delta feed
+    # says nothing about the products it does not mention.
+    if allow_dropped:
         threshold = int(cfg["missing_full_feeds_before_zero"])
         missing = {
             p.barcode: p.missing_from_full_feeds

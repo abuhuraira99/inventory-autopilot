@@ -44,6 +44,17 @@
    1. TOKENS
    ========================================================================== */
 
+/* `hidden` must actually hide.
+   The browser's own stylesheet says [hidden] { display: none }, but that is the
+   weakest rule there is, and ANY component rule setting `display` beats it --
+   `.pill { display: inline-flex }` did, which is why the "Not live" warning sat
+   permanently in the app bar of every page. It is toggled from JavaScript via
+   `element.hidden`, and the element never once obeyed. The dashboard therefore
+   showed a standing alarm about stale figures while the figures were fine:
+   exactly the crying-wolf failure this codebase takes care to avoid elsewhere,
+   caused by one line of CSS. Anything using `hidden` depends on this rule. */
+[hidden] { display: none !important; }
+
 :root {
   /* --- primary: petrol blue --------------------------------------------- */
   --md-primary:                 #00658b;
@@ -107,12 +118,24 @@
   --md-shape-full: 999px;
 
   /* --- elevation: MD3's five levels ------------------------------------- */
+  /*
+     Two layers each, and deliberately not MD3's published numbers.
+     The spec's shadows are tuned for a phone held at arm's length; on a
+     desktop dashboard read for hours they are a hard grey line under every
+     card, and thirty of them on one page reads as clutter rather than depth.
+     These keep the same two-layer structure -- a tight contact shadow plus a
+     wide ambient one -- but push the blur out and the opacity down, which is
+     what separates a surface that looks lifted from one that looks outlined.
+     The key light is also tinted with the surface hue rather than pure black,
+     so a shadow never turns the tinted neutrals underneath it grey.
+  */
+  --md-shadow-hue: 210 30% 12%;
   --md-elev-0: none;
-  --md-elev-1: 0 1px 2px rgba(0,0,0,.30), 0 1px 3px 1px rgba(0,0,0,.15);
-  --md-elev-2: 0 1px 2px rgba(0,0,0,.30), 0 2px 6px 2px rgba(0,0,0,.15);
-  --md-elev-3: 0 1px 3px rgba(0,0,0,.30), 0 4px 8px 3px rgba(0,0,0,.15);
-  --md-elev-4: 0 2px 3px rgba(0,0,0,.30), 0 6px 10px 4px rgba(0,0,0,.15);
-  --md-elev-5: 0 4px 4px rgba(0,0,0,.30), 0 8px 12px 6px rgba(0,0,0,.15);
+  --md-elev-1: 0 1px 2px hsl(var(--md-shadow-hue) / .06), 0 2px 8px -2px hsl(var(--md-shadow-hue) / .08);
+  --md-elev-2: 0 1px 2px hsl(var(--md-shadow-hue) / .07), 0 6px 16px -4px hsl(var(--md-shadow-hue) / .10);
+  --md-elev-3: 0 2px 4px hsl(var(--md-shadow-hue) / .07), 0 12px 28px -8px hsl(var(--md-shadow-hue) / .12);
+  --md-elev-4: 0 2px 6px hsl(var(--md-shadow-hue) / .08), 0 18px 40px -12px hsl(var(--md-shadow-hue) / .14);
+  --md-elev-5: 0 4px 8px hsl(var(--md-shadow-hue) / .09), 0 28px 56px -16px hsl(var(--md-shadow-hue) / .16);
 
   /* --- state layer opacities, straight from the MD3 spec ---------------- */
   --md-state-hover:   0.08;
@@ -188,11 +211,14 @@
 
     /* Shadows read as noise on a dark ground; MD3 leans on surface
        elevation there instead, so these are softened rather than removed. */
-    --md-elev-1: 0 1px 2px rgba(0,0,0,.50);
-    --md-elev-2: 0 1px 3px rgba(0,0,0,.55);
-    --md-elev-3: 0 2px 6px rgba(0,0,0,.60);
-    --md-elev-4: 0 4px 10px rgba(0,0,0,.60);
-    --md-elev-5: 0 6px 14px rgba(0,0,0,.65);
+    /* Dark needs more spread and less contact than light: on a dark ground a
+       tight black shadow is invisible, and depth has to come from the wide
+       ambient layer instead. */
+    --md-elev-1: 0 1px 2px rgb(0 0 0 / .40), 0 2px 10px -2px rgb(0 0 0 / .45);
+    --md-elev-2: 0 1px 3px rgb(0 0 0 / .44), 0 8px 20px -4px rgb(0 0 0 / .50);
+    --md-elev-3: 0 2px 5px rgb(0 0 0 / .46), 0 14px 32px -8px rgb(0 0 0 / .55);
+    --md-elev-4: 0 3px 8px rgb(0 0 0 / .48), 0 22px 46px -12px rgb(0 0 0 / .58);
+    --md-elev-5: 0 5px 12px rgb(0 0 0 / .50), 0 32px 64px -16px rgb(0 0 0 / .62);
   }
 }
 
@@ -238,11 +264,11 @@
   --md-outline:                 #8b9297;
   --md-outline-variant:         #41484d;
   --md-scrim:                   rgba(0, 0, 0, 0.7);
-  --md-elev-1: 0 1px 2px rgba(0,0,0,.50);
-  --md-elev-2: 0 1px 3px rgba(0,0,0,.55);
-  --md-elev-3: 0 2px 6px rgba(0,0,0,.60);
-  --md-elev-4: 0 4px 10px rgba(0,0,0,.60);
-  --md-elev-5: 0 6px 14px rgba(0,0,0,.65);
+  --md-elev-1: 0 1px 2px rgb(0 0 0 / .40), 0 2px 10px -2px rgb(0 0 0 / .45);
+  --md-elev-2: 0 1px 3px rgb(0 0 0 / .44), 0 8px 20px -4px rgb(0 0 0 / .50);
+  --md-elev-3: 0 2px 5px rgb(0 0 0 / .46), 0 14px 32px -8px rgb(0 0 0 / .55);
+  --md-elev-4: 0 3px 8px rgb(0 0 0 / .48), 0 22px 46px -12px rgb(0 0 0 / .58);
+  --md-elev-5: 0 5px 12px rgb(0 0 0 / .50), 0 32px 64px -16px rgb(0 0 0 / .62);
 }
 
 /* ==========================================================================
@@ -711,15 +737,26 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
    10. TABLES
    ========================================================================== */
 
+/* The table scrolls inside its own box rather than with the page.
+   `position: sticky` on a header sticks to the nearest SCROLLING ancestor, and
+   `overflow-x: auto` here already made this element one -- so the header was
+   pinned to a box that never scrolled vertically, and rode up out of sight with
+   the page. Capping the height gives it something real to stick to, and has a
+   second benefit: the pager underneath stays on screen, so paging through a
+   long table no longer throws you back to the top of the page every click. */
 .md-table-wrap {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: var(--table-max-h, calc(100vh - 22rem));
+  overscroll-behavior: contain;
   border-radius: var(--md-shape-md);
   border: 1px solid var(--md-outline-variant);
   background: var(--md-surface-container-lowest);
 }
+/* Short tables must not be stretched to the cap, only stopped from exceeding it. */
+.md-table-wrap--auto { max-height: none; }
 .md-table { width: 100%; border-collapse: collapse; min-width: 560px; }
 .md-table thead th {
-  position: sticky; top: 0; z-index: 1;
+  position: sticky; top: 0; z-index: 2;
   text-align: left;
   padding: 12px 16px;
   background: var(--md-surface-container);

@@ -300,6 +300,142 @@
      7. Wire up
      ====================================================================== */
 
+
+  // ------------------------------------------------------------------
+  // Keeping your place across a reload
+  // ------------------------------------------------------------------
+  //
+  // Every page in this dashboard is a real form post or a real link, which is
+  // what makes it work without JavaScript -- and it means every action reloads
+  // the page and lands you back at the very top. On the settings page that is
+  // genuinely painful: change one field near the bottom, save, and you are
+  // returned to the top to scroll down again for the next one. Same on any
+  // paged table.
+  //
+  // Keyed by path, not by full URL, so ?page=3 and ?flash=Saved count as the
+  // same page. Cleared as soon as it is used, so it can never restore a
+  // position from an hour ago.
+  function scrollKey() {
+    return "ia:scroll:" + window.location.pathname;
+  }
+
+  function rememberScroll() {
+    try {
+      window.sessionStorage.setItem(scrollKey(), String(window.scrollY || 0));
+    } catch (e) {
+      /* private browsing, or storage disabled. Not important enough to fail. */
+    }
+  }
+
+  function initScrollMemory() {
+    var saved = null;
+    try {
+      saved = window.sessionStorage.getItem(scrollKey());
+      if (saved !== null) window.sessionStorage.removeItem(scrollKey());
+    } catch (e) {
+      return;
+    }
+
+    if (saved !== null) {
+      var y = parseInt(saved, 10);
+      if (!isNaN(y) && y > 0) {
+        // After layout, or the page is not yet tall enough to scroll to y.
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(function () {
+            window.scrollTo(0, y);
+          });
+        });
+      }
+    }
+
+    // Capture phase, so the position is stored before anything else can
+    // cancel or redirect the event.
+    document.addEventListener("submit", rememberScroll, true);
+    document.addEventListener(
+      "click",
+      function (event) {
+        var link = event.target && event.target.closest
+          ? event.target.closest("a[href]")
+          : null;
+        if (!link) return;
+        if (link.target && link.target !== "_self") return;
+        if (link.getAttribute("href").charAt(0) === "#") return;
+        if (link.host !== window.location.host) return;
+        rememberScroll();
+      },
+      true
+    );
+  }
+
+  // ------------------------------------------------------------------
+  // Jump straight to a page
+  // ------------------------------------------------------------------
+  //
+  // Built here rather than in each template because there are four separate
+  // pagers and they should not drift apart. With hundreds of pages, "Next"
+  // pressed ninety times is not a way to reach page ninety.
+  function initPageJump() {
+    document.querySelectorAll(".pager").forEach(function (pager) {
+      if (pager.querySelector("[data-page-jump]")) return;
+
+      var info = pager.querySelector(".pager__info");
+      if (!info) return;
+
+      var matched = /(\d[\d,]*)\s*$/.exec(info.textContent || "");
+      if (!matched) return;
+      var total = parseInt(matched[1].replace(/,/g, ""), 10);
+      if (!total || total < 3) return;  // two pages: Previous and Next suffice
+
+      var form = document.createElement("form");
+      form.className = "pager__jump";
+      form.setAttribute("data-page-jump", "");
+      form.method = "get";
+      form.action = window.location.pathname;
+
+      // Carry the current filters through, or jumping would silently drop them.
+      var current = new URLSearchParams(window.location.search);
+      current.forEach(function (value, key) {
+        if (key === "page" || key === "flash" || key === "tone") return;
+        var keep = document.createElement("input");
+        keep.type = "hidden";
+        keep.name = key;
+        keep.value = value;
+        form.appendChild(keep);
+      });
+
+      var label = document.createElement("label");
+      label.className = "pager__jump-label";
+      label.textContent = "Go to page";
+      var box = document.createElement("input");
+      box.className = "md-input pager__jump-input";
+      box.type = "number";
+      box.name = "page";
+      box.min = "1";
+      box.max = String(total);
+      box.setAttribute("aria-label", "Go to page number, 1 to " + total);
+      label.appendChild(box);
+
+      var go = document.createElement("button");
+      go.className = "md-btn md-btn--outlined md-btn--small";
+      go.type = "submit";
+      go.textContent = "Go";
+
+      form.appendChild(label);
+      form.appendChild(go);
+      form.addEventListener("submit", function (event) {
+        var wanted = parseInt(box.value, 10);
+        if (!wanted || wanted < 1 || wanted > total) {
+          event.preventDefault();
+          box.focus();
+          return;
+        }
+        rememberScroll();
+      });
+
+      pager.appendChild(form);
+    });
+  }
+
   function init() {
     var toggle = document.querySelector("[data-theme-toggle]");
     if (toggle) {
@@ -311,6 +447,8 @@
     initConfirmations();
     initDirtyGuard();
     initTableFilter();
+    initScrollMemory();
+    initPageJump();
     startPolling();
 
     // Switches that submit their form the moment they are flipped: the pause

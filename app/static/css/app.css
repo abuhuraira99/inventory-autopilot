@@ -403,3 +403,44 @@
   .md-card, .md-table-wrap { break-inside: avoid; box-shadow: none; }
   body { background: #fff; color: #000; }
 }
+
+/* ==========================================================================
+   Layout corrections
+   ========================================================================== */
+
+/* Cards that sit side by side in a grid stretch to the tallest of the row --
+   which is right, until one of them holds less content than the other and the
+   difference shows as a slab of empty background under a short table. Making
+   the card a column and letting its body grow pushes the table's own surface
+   and border down to the card's full height, so the two read as a matched
+   pair instead of one finished card and one half-filled one. */
+.md-card--equal { height: 100%; display: flex; flex-direction: column; }
+.md-card--equal > .md-card__body { flex: 1 1 auto; display: flex; flex-direction: column; }
+.md-card--equal > .md-card__body > .md-fill { flex: 1 1 auto; }
+.md-fill { display: flex; flex-direction: column; }
+.md-fill > .md-table { flex: 0 0 auto; }
+
+/* ==========================================================================
+   Jump straight to a page
+   ========================================================================== */
+
+.pager__jump {
+  display: flex; align-items: center; gap: 8px;
+  margin-left: 16px; padding-left: 16px;
+  border-left: 1px solid var(--md-outline-variant);
+}
+.pager__jump-label {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--md-on-surface-variant);
+  font-size: 13px; white-space: nowrap;
+}
+.pager__jump-input {
+  width: 88px;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .pager__jump {
+    margin-left: 0; padding-left: 0;
+    border-left: none; width: 100%; justify-content: center;
+  }
+}

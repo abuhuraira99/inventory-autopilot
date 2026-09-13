@@ -120,6 +120,8 @@ def running(monkeypatch):
         "sync_interval_minutes": 60,
         "sync_offset_minutes": 20,
         "catalog_refresh_hour": 3,
+        "catalog_refresh_hourly": False,
+        "catalog_refresh_offset_minutes": 5,
         "timezone": "America/Los_Angeles",
     }
 
@@ -304,3 +306,76 @@ def test_every_setting_is_read_by_something() -> None:
         and f"'{spec.key}'" not in sources
     ]
     assert not unread, f"settings that nothing reads: {', '.join(unread)}"
+
+
+class TestTheHourlyCatalogueRefreshTakesEffect:
+    """
+    The catalogue refresh became hourly with its own minute, so that every check
+    decides against a picture of Amazon that is minutes old rather than up to a
+    day old -- and so that items sent but only sampled at verification time get
+    confirmed within the hour instead of never.
+
+    It is given its own tests because of the history. ``sync_offset_minutes``
+    shipped, was saved happily by the dashboard, and did nothing at all; the
+    rescheduler compared only the interval and could not see a change of minute.
+    That took several attempts to put right. This setting has exactly the same
+    shape, so the guard is written first this time: change the minute, the
+    refresh must move; turn it off, it must go back to nightly.
+    """
+
+    def test_it_fires_hourly_on_the_configured_minute(self, running) -> None:
+        scheduler, started, values = running
+
+        values["catalog_refresh_hourly"] = True
+        values["catalog_refresh_offset_minutes"] = 5
+        scheduler.apply_schedule_settings()
+
+        trigger = started.get_job(scheduler.JOB_CATALOG).trigger
+        assert "minute='5'" in repr(trigger), repr(trigger)
+        # Hourly means no hour restriction at all.
+        assert scheduler._cron_hour(trigger) is None, repr(trigger)
+
+    def test_changing_only_the_minute_moves_it(self, running) -> None:
+        """
+        The exact bug the sync offset had: the hour is unchanged, so anything
+        comparing hours alone reports "no change" and the setting is decorative.
+        """
+        scheduler, started, values = running
+        values["catalog_refresh_hourly"] = True
+        values["catalog_refresh_offset_minutes"] = 5
+        scheduler.apply_schedule_settings()
+        assert "minute='5'" in repr(started.get_job(scheduler.JOB_CATALOG).trigger)
+
+        values["catalog_refresh_offset_minutes"] = 40
+        scheduler.apply_schedule_settings()
+
+        trigger = started.get_job(scheduler.JOB_CATALOG).trigger
+        assert "minute='40'" in repr(trigger), (
+            "the catalogue refresh ignored a change of minute"
+        )
+
+    def test_turning_it_off_goes_back_to_nightly(self, running) -> None:
+        scheduler, started, values = running
+        values["catalog_refresh_hourly"] = True
+        values["catalog_refresh_offset_minutes"] = 40
+        scheduler.apply_schedule_settings()
+        assert scheduler._cron_hour(started.get_job(scheduler.JOB_CATALOG).trigger) is None
+
+        values["catalog_refresh_hourly"] = False
+        scheduler.apply_schedule_settings()
+
+        trigger = started.get_job(scheduler.JOB_CATALOG).trigger
+        assert scheduler._cron_hour(trigger) == 3, repr(trigger)
+
+    def test_the_hourly_refresh_still_follows_the_timezone(self, running) -> None:
+        """A schedule that ignores the zone is the timezone bug all over again."""
+        scheduler, started, values = running
+        values["catalog_refresh_hourly"] = True
+        scheduler.apply_schedule_settings()
+
+        values["timezone"] = "America/New_York"
+        scheduler.apply_schedule_settings()
+
+        assert str(started.get_job(scheduler.JOB_CATALOG).trigger.timezone) == (
+            "America/New_York"
+        )

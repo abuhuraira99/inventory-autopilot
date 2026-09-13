@@ -54,6 +54,7 @@ from app.config import settings
 from app.core import settings_store
 from app.db import run_lock, session_scope
 from app.engine.pipeline import execute_run
+from app.engine.pusher import confirm_from_catalogue
 from app.engine.report_builder import prune_old_reports
 from app.models import (
     AmazonListing,
@@ -272,6 +273,29 @@ def job_catalog_refresh() -> None:
             sync.status = "completed"
             sync.finished_at = utcnow()
 
+            # Settle anything still waiting to be confirmed, using the report we
+            # have just downloaded. A large batch verifies only a sample when it
+            # is sent -- reading 5,000 SKUs back one at a time would take over
+            # forty minutes -- and until now the remainder was never settled by
+            # anything at all, despite the code promising this exact step. The
+            # quantities are already in memory, so this costs no Amazon requests.
+            # A listing with no quantity reported is left out entirely rather
+            # than read as zero: absence is not evidence, and guessing here
+            # would mark a working change "did not stick".
+            confirmed, gave_up = confirm_from_catalogue(
+                session,
+                {
+                    rec.seller_sku: rec.quantity
+                    for rec in records
+                    if rec.quantity is not None
+                },
+            )
+            if confirmed or gave_up:
+                log.info(
+                    "catalogue refresh settled %d outstanding item(s); %d gave up",
+                    confirmed, gave_up,
+                )
+
             log.info(
                 "catalogue refreshed: %d listings (%d in scope), %d new, %d gone",
                 stats.parsed_rows, in_scope, new_count, disappeared,
@@ -386,8 +410,34 @@ def _current_catalog_hour() -> int:
     return max(0, min(23, hour))
 
 
-def _catalog_trigger(hour: int, tz: ZoneInfo) -> CronTrigger:
-    """The nightly catalogue refresh. Defined once, so start() cannot drift."""
+def _current_catalog_config() -> tuple[bool, int, int]:
+    """
+    ``(hourly, hour, minute)`` for the catalogue refresh.
+
+    One function, read by both the trigger builder and the rescheduler, for the
+    same reason :func:`_current_offset_minutes` exists: when the two disagreed
+    about where a value came from, saving the setting changed the page and
+    nothing else. Every caller reads it here or not at all.
+    """
+    with session_scope() as session:
+        hourly = bool(settings_store.get(session, "catalog_refresh_hourly"))
+        hour = int(settings_store.get(session, "catalog_refresh_hour") or 3)
+        minute = int(settings_store.get(session, "catalog_refresh_offset_minutes") or 0)
+    return hourly, max(0, min(23, hour)), max(0, min(59, minute))
+
+
+def _catalog_trigger(hour: int, tz: ZoneInfo, *, hourly: bool = False, minute: int = 0) -> CronTrigger:
+    """
+    The catalogue refresh. Defined once, so start() cannot drift.
+
+    Hourly keeps our picture of Amazon minutes old instead of up to a day old,
+    which matters because every decision is made against that picture. It also
+    settles items that were sent but only sampled at verification time -- the
+    report it downloads carries every quantity already, so confirming from it
+    costs no extra Amazon requests.
+    """
+    if hourly:
+        return CronTrigger(minute=minute, timezone=tz)
     return CronTrigger(hour=hour, minute=0, timezone=tz)
 
 
@@ -478,26 +528,36 @@ def _reschedule_daily_jobs_if_needed() -> None:
         return
 
     tz = _timezone()
-    hour = _current_catalog_hour()
+    hourly, hour, minute = _current_catalog_config()
 
-    for job_id, build, wanted_hour in (
-        (JOB_CATALOG, _catalog_trigger, hour),
-        (JOB_DIGEST, _digest_trigger, (hour + 1) % 24),
-    ):
+    # Compared as whole triggers rather than by hour alone. The hour comparison
+    # was enough while the refresh could only be nightly; it silently cannot see
+    # a change of MINUTE, and an hourly trigger has no single hour to read at
+    # all, so it would have reported "no change" for ever. This is the exact
+    # shape of the bug that made the sync offset look hard-coded: compare the
+    # whole thing, or the setting is decorative.
+    wanted = {
+        JOB_CATALOG: _catalog_trigger(hour, tz, hourly=hourly, minute=minute),
+        JOB_DIGEST: _digest_trigger(hour, tz),
+    }
+
+    for job_id, trigger in wanted.items():
         job = _scheduler.get_job(job_id)
         if job is None:
             continue
 
-        current_hour = _cron_hour(job.trigger)
-        current_tz = str(getattr(job.trigger, "timezone", "") or "")
-        if current_hour == wanted_hour and current_tz == tz.key:
+        # repr, not str: CronTrigger.__str__ prints the fields and omits the
+        # timezone entirely, so comparing str() would have silently ignored a
+        # change of zone -- the single most dangerous schedule setting there is,
+        # and the one with its own regression test. repr carries it.
+        if repr(job.trigger) == repr(trigger):
             continue
 
         log.info(
-            "%s moved from %s:00 %s to %s:00 %s; rescheduling",
-            job_id, current_hour, current_tz, wanted_hour, tz.key,
+            "%s schedule changed from [%s] to [%s]; rescheduling",
+            job_id, repr(job.trigger), repr(trigger),
         )
-        _scheduler.reschedule_job(job_id, trigger=build(hour, tz))
+        _scheduler.reschedule_job(job_id, trigger=trigger)
 
 
 def _cron_hour(trigger: object) -> int | None:
@@ -554,7 +614,7 @@ def start() -> BackgroundScheduler | None:
     tz = _timezone()
     interval = _current_interval_minutes()
 
-    catalog_hour = _current_catalog_hour()
+    catalog_hourly, catalog_hour, catalog_minute = _current_catalog_config()
 
     scheduler = BackgroundScheduler(
         timezone=tz,
@@ -598,7 +658,9 @@ def start() -> BackgroundScheduler | None:
 
     scheduler.add_job(
         job_catalog_refresh,
-        trigger=_catalog_trigger(catalog_hour, tz),
+        trigger=_catalog_trigger(
+            catalog_hour, tz, hourly=catalog_hourly, minute=catalog_minute
+        ),
         id=JOB_CATALOG,
         name="Refresh the Amazon catalogue",
         replace_existing=True,

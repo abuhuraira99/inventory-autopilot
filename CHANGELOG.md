@@ -11,6 +11,133 @@ the unfixed code before it was fixed.
 
 ---
 
+## [Unreleased] — 13 September 2026
+
+The run before going to Automatic. Tests 4, 5 and 6 all passed against the live
+account, cross-checked by hand in Seller Central. Everything below came out of
+watching that happen.
+
+### Fixed — a large batch could never finish confirming
+
+Test 6 sent 5,000 changes. Amazon applied them; the dashboard showed a handful
+confirmed and the rest stuck on "accepted" for ever, and pressing **Refresh
+catalogue** did nothing for them no matter how many times it was pressed.
+
+Two faults sitting on top of each other.
+
+Verifying a batch reads each SKU back individually, so batches over 500 items
+check a random sample of 100 and leave the rest. That is a sound trade — 5,000
+reads at our self-imposed 2/second is over forty minutes — and the code said the
+remainder was "settled by the daily catalogue refresh". **It was not.** Nothing
+in the refresh path had ever touched `push_items`. The fallback named in the
+comment did not exist, so an unsampled item stayed `ACCEPTED` permanently. The
+refresh button worked correctly and, for these rows, did nothing, which is the
+worst possible combination.
+
+Underneath that, `batch.verified_count = summary.verified` **overwrote** the
+count on every pass instead of accumulating it. A batch being confirmed steadily
+over several runs kept reporting whatever the latest pass alone had managed, so
+even the sampled items looked stuck.
+
+The refresh now settles outstanding items from the report it has just
+downloaded. That report already carries every listing's quantity, so this costs
+**no additional Amazon requests at all** — the information was being thrown away.
+A SKU absent from the report is left alone rather than failed: absence is not
+evidence, and a system that cries wolf teaches its operator to ignore it.
+
+### Fixed — switching to practice mode could confirm real changes without checking
+
+A practice-mode client never contacts Amazon. `verify_batch` has a shortcut that
+marks items verified so a practice run's own imaginary batch ends tidily. Once a
+later run began re-checking real batches, that shortcut became reachable with a
+batch that had genuinely been sent — and it would have marked live changes
+"confirmed on Amazon", recording a `verified_quantity` we invented rather than
+one Amazon reported. A false success, on a live account, with no error anywhere.
+
+It is now gated on the batch's own run mode, so flipping the mode back to
+practice cannot launder a real pending batch. The regression test fails against
+the previous code with `assert 1 == 0`.
+
+### Fixed — changes above the per-run limit waited a day, not an hour
+
+`max_changes_per_run` defers the remainder, and **nothing stored what was
+deferred** — `deferred` is a counter and nothing else. Only a run that had just
+read a full feed re-decided the whole catalogue; ordinary delta runs looked only
+at barcodes that delta mentioned. So a full feed proposing 38,000 changes sent
+5,000 and the other 33,000 simply evaporated, invisible to every run until the
+next full feed arrived a day later. At 5,000 a day that is over a week, while
+the settings page said "about eight runs". The operator had been clearing it by
+hand with **Reconcile everything** — exactly the symptom.
+
+Every run now reconciles the whole in-scope catalogue. It costs one pass over
+~45,000 listings and no extra Amazon requests, because decisions are made
+against the stored picture. The change limit and every guardrail still apply.
+
+**The dropped-product logic was deliberately NOT moved with it.** That code —
+which takes a product off sale for being absent from the vendor — was gated on
+the same flag, and making the flag always true would have let a delta run start
+zeroing the catalogue. Absence from a delta means "unchanged", never "gone".
+The two ideas are now separate arguments, which is what they always were.
+
+### Added — the catalogue refresh can run hourly, on its own minute
+
+Refreshing once a day meant every decision for up to 24 hours was made against
+a day-old picture of Amazon. It is now hourly by default, at a minute set on the
+Settings page independently of the sync offset, so the two can be spaced apart
+without touching code.
+
+Given the history — `sync_offset_minutes` shipped, saved perfectly, and did
+nothing, because the rescheduler compared only the interval and could not see a
+change of minute — the guard was written first this time. Comparison is now on
+the whole trigger rather than the hour, and `repr` rather than `str`, because
+`CronTrigger.__str__` omits the timezone entirely and comparing `str` would have
+silently ignored a change of zone. The existing timezone test caught that during
+development, which is precisely what it was written for.
+
+### Fixed — "Not live" was showing on every page, always
+
+It means "the live figures could not be refreshed" and is toggled from
+JavaScript with `element.hidden`. The element never obeyed: the browser's
+`[hidden] { display: none }` is the weakest rule there is, and
+`.pill { display: inline-flex }` overrode it. So the dashboard carried a
+standing alarm about stale data while the data was fine — a permanent false
+alarm, caused by one line of CSS, in a system that is careful about this
+everywhere else. `[hidden]` is now enforced.
+
+### Fixed — tables and forms threw you back to the top
+
+Reported from daily use, all the same root cause: every action is a real form
+post or link, so every action reloads and lands at the top of the page.
+
+- **Column headers scrolled away.** They were already `position: sticky`, but
+  `overflow-x: auto` on the wrapper made *the wrapper* the scroll container, so
+  they were pinned to a box that never scrolled vertically. The table now
+  scrolls within its own height, which also keeps the pager on screen.
+- **Paging returned you to the top** every click, so reaching page 30 meant
+  scrolling down 30 times. Position is now remembered across the reload.
+- **Saving a setting returned you to the top**, so changing two fields in the
+  same section meant scrolling back each time. Same fix.
+- **No way to reach a distant page.** A "Go to page" box is now added to every
+  pager from JavaScript, so the four pagers cannot drift apart. It carries the
+  current filters through rather than silently dropping them.
+
+### Changed — the interface
+
+Elevation was MD3's published shadows, which are tuned for a phone at arm's
+length; on a dashboard read for hours they are a hard grey line under every card
+and, thirty to a page, read as clutter. Same two-layer structure, wider blur,
+much lower opacity, and tinted with the surface hue so a shadow never greys the
+neutrals beneath it. Dark mode gets more spread and less contact, because on a
+dark ground a tight black shadow is invisible.
+
+The five report cards were two elevated and three outlined, which read as two
+important cards and three afterthoughts — a difference of weight and colour
+carrying meaning the "Used daily by the team" pill already states in words. They
+are now peers. The two dashboard tables no longer end in a slab of empty
+background where one holds less than the other.
+
+---
+
 ## [Unreleased] — 12 September 2026
 
 The first real writes to the live Amazon account, and the first defect found by the

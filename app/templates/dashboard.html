@@ -58,7 +58,7 @@
       </div>
     </div>
     <div class="md-card__body md-card__body--flush">
-      <div class="md-table-wrap" style="border:none;border-radius:0">
+      <div class="md-table-wrap md-table-wrap--auto md-fill" style="border:none;border-radius:0">
         <table class="md-table">
           <thead>
             <tr>
@@ -312,14 +312,14 @@
 
 <div class="md-grid" style="grid-template-columns:repeat(auto-fit,minmax(400px,1fr))">
 
-  <div class="md-card md-card--outlined">
+  <div class="md-card md-card--outlined md-card--equal">
     <div class="md-card__header">
       <h2 class="md-card__title">Recent checks</h2>
       <a class="md-btn md-btn--text md-btn--small" href="/runs">See all</a>
     </div>
     <div class="md-card__body md-card__body--flush">
       {% if recent_runs %}
-        <div class="md-table-wrap" style="border:none;border-radius:0">
+        <div class="md-table-wrap md-table-wrap--auto md-fill" style="border:none;border-radius:0">
           <table class="md-table md-table--dense">
             <thead>
               <tr>
@@ -361,7 +361,7 @@
     </div>
   </div>
 
-  <div class="md-card md-card--outlined">
+  <div class="md-card md-card--outlined md-card--equal">
     <div class="md-card__header">
       <div>
         <h2 class="md-card__title">Vendor files</h2>
@@ -372,7 +372,7 @@
     </div>
     <div class="md-card__body md-card__body--flush">
       {% if recent_files %}
-        <div class="md-table-wrap" style="border:none;border-radius:0">
+        <div class="md-table-wrap md-table-wrap--auto md-fill" style="border:none;border-radius:0">
           <table class="md-table md-table--dense">
             <thead>
               <tr><th>File</th><th>Type</th><th>Result</th><th class="num">Rows</th></tr>

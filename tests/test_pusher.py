@@ -48,7 +48,12 @@ from app.amazon.guard import PriceFieldRefused
 from app.core import settings_store
 from app.engine.decision import Decision, Direction
 from app.engine.pipeline import RunOutcome, _recover_interrupted_batches
-from app.engine.pusher import create_batch, send_batch, verify_batch
+from app.engine.pusher import (
+    confirm_from_catalogue,
+    create_batch,
+    send_batch,
+    verify_batch,
+)
 from app.engine.rollback import RollbackError, execute_rollback, plan_rollback
 from app.models import (
     AmazonListing,
@@ -949,3 +954,101 @@ class TestAmazonTakesItsTimeToApplyAChange:
         assert item.result is ItemResult.NOT_APPLIED
         assert summary.not_applied == 1
         assert "still shows 7" in (item.amazon_message or "")
+
+
+# ===========================================================================
+# Confirming large batches, and not confirming what was never checked
+# ===========================================================================
+
+def test_catalogue_refresh_confirms_items_a_sampled_batch_left_open(
+    session, run, listings
+):
+    """
+    The promise in the sampling comment must actually be kept.
+
+    A batch above the sample threshold verifies only a handful of SKUs. The
+    docstring said the rest was "settled by the daily catalogue refresh" -- and
+    nothing in the refresh path ever touched push_items, so those items stayed
+    ACCEPTED for ever. A 5,000-item run reported a few confirmed and never
+    moved, while Amazon had applied every one of them.
+    """
+    batch = create_batch(
+        session,
+        run.id,
+        [
+            _decision("HA-AMS-0008811065126", now=7, want=0),
+            _decision("HA-AMS-0008811096427", now=4, want=2),
+        ],
+    )
+    batch.status = BatchStatus.SENT
+    batch.sent_at = utcnow()
+    for item in session.query(PushItem).filter(PushItem.batch_id == batch.id):
+        item.result = ItemResult.ACCEPTED
+    session.flush()
+
+    confirmed, gave_up = confirm_from_catalogue(
+        session,
+        {"HA-AMS-0008811065126": 0, "HA-AMS-0008811096427": 2},
+    )
+
+    assert confirmed == 2
+    assert gave_up == 0
+    results = {
+        i.seller_sku: i.result
+        for i in session.query(PushItem).filter(PushItem.batch_id == batch.id)
+    }
+    assert set(results.values()) == {ItemResult.VERIFIED}
+    # The batch, and our picture of Amazon, must move with it.
+    assert batch.verified_count == 2
+    assert batch.status is BatchStatus.VERIFIED
+    assert session.get(AmazonListing, "HA-AMS-0008811065126").quantity == 0
+
+
+def test_catalogue_refresh_leaves_a_sku_it_cannot_see_alone(session, run, listings):
+    """Absence from the report is not evidence that a change failed."""
+    batch = create_batch(
+        session, run.id, [_decision("HA-AMS-0008811065126", now=7, want=0)]
+    )
+    batch.status = BatchStatus.SENT
+    batch.sent_at = utcnow()
+    for item in session.query(PushItem).filter(PushItem.batch_id == batch.id):
+        item.result = ItemResult.ACCEPTED
+    session.flush()
+
+    confirmed, gave_up = confirm_from_catalogue(session, {"HA-AMS-something-else": 3})
+
+    assert (confirmed, gave_up) == (0, 0)
+    item = session.query(PushItem).filter(PushItem.batch_id == batch.id).one()
+    assert item.result is ItemResult.ACCEPTED
+
+
+def test_practice_mode_cannot_confirm_a_batch_that_was_really_sent(
+    session, run, listings
+):
+    """
+    Switching the mode to practice must not launder a real pending batch.
+
+    A practice client never contacts Amazon. The shortcut that marks items
+    VERIFIED exists only so a practice run's own imaginary batch ends tidily.
+    Reached with a batch that was genuinely sent, it would report live changes
+    as confirmed having checked nothing at all -- a false success, which is the
+    worst failure this system can produce.
+    """
+    batch = create_batch(
+        session, run.id, [_decision("HA-AMS-0008811065126", now=7, want=0)]
+    )
+    batch.status = BatchStatus.SENT
+    batch.sent_at = utcnow()
+    for item in session.query(PushItem).filter(PushItem.batch_id == batch.id):
+        item.result = ItemResult.ACCEPTED
+    session.flush()
+
+    # run.mode is AUTOMATIC: this batch was really sent.
+    summary = verify_batch(
+        session, _client(_accept_everything, dry_run=True), batch, settle_seconds=0
+    )
+
+    assert summary.verified == 0
+    item = session.query(PushItem).filter(PushItem.batch_id == batch.id).one()
+    assert item.result is ItemResult.ACCEPTED
+    assert item.verified_quantity is None

@@ -197,12 +197,47 @@ SPECS: list[Spec] = [
         max_value=23,
         label="Refresh the Amazon catalogue at … o'clock",
         help_text=(
-            "Once a day the system downloads Amazon's All Listings Report to learn "
-            "the real SKUs and the quantities Amazon is currently showing. A quiet "
-            "hour is best. Uses the timezone above."
+            "Only used when the refresh below is set to once a day. The system "
+            "downloads Amazon's All Listings Report to learn the real SKUs and the "
+            "quantities Amazon is currently showing. A quiet hour is best. Uses the "
+            "timezone above."
         ),
         category="schedule",
         sort_order=12,
+    ),
+    Spec(
+        key="catalog_refresh_hourly",
+        default=True,
+        value_type="bool",
+        label="Refresh the Amazon catalogue every hour",
+        help_text=(
+            "On, the catalogue is refreshed every hour at the minute below, so each "
+            "check decides against a picture of Amazon that is minutes old rather "
+            "than up to a day old. It also confirms changes that were sent but not "
+            "yet read back, which is what moves them to 'Confirmed on Amazon'. Off, "
+            "it runs once a day at the hour above."
+        ),
+        category="schedule",
+        sort_order=13,
+        high_impact=True,
+    ),
+    Spec(
+        key="catalog_refresh_offset_minutes",
+        default=5,
+        value_type="int",
+        min_value=0,
+        max_value=59,
+        label="… at this many minutes past the hour",
+        help_text=(
+            "Which minute of the hour the hourly catalogue refresh starts. Keep a "
+            "gap between this and 'Run the check at … minutes past the hour' so the "
+            "two do not collide: a refresh of 90,000 listings takes a few minutes, "
+            "and a check that starts while one is running will wait for it. They "
+            "are separate settings on purpose, so you can move either one without "
+            "touching the code."
+        ),
+        category="schedule",
+        sort_order=14,
     ),
     Spec(
         key="max_file_age_hours",

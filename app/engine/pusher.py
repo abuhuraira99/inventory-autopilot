@@ -34,6 +34,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.amazon.client import SpApiClient, SpApiError, SpApiPermissionError
@@ -47,6 +48,7 @@ from app.models import (
     PushBatch,
     PushItem,
     PushMethod,
+    SyncMode,
     utcnow,
 )
 
@@ -408,6 +410,21 @@ def verify_batch(
             batch.id, len(accepted_items), len(to_check),
         )
 
+    # A practice-mode client cannot read Amazon, so it cannot confirm anything.
+    # The shortcut below exists only so a practice run's own imaginary batch
+    # reaches a tidy end state. Applying it to a batch that was REALLY sent
+    # would mark live changes "confirmed" having checked nothing -- a false
+    # success, which on this system is the worst kind of wrong. Switching the
+    # mode back to practice must never launder a real pending batch.
+    practice_batch = batch.run is not None and batch.run.mode is SyncMode.DRY_RUN
+    if client.dry_run and not practice_batch:
+        log.info(
+            "batch %d was sent for real but the current mode is practice, which cannot "
+            "read Amazon; leaving %d item(s) unconfirmed rather than guessing",
+            batch.id, len(to_check),
+        )
+        return summary
+
     if settle_seconds > 0 and not client.dry_run:
         # Amazon's listing updates are eventually consistent. Reading straight
         # away would report false mismatches.
@@ -471,9 +488,26 @@ def verify_batch(
             )
             summary.not_applied += 1
 
-    batch.verified_count = summary.verified
+    # Counted from the database, not from this pass. A sampled batch is checked
+    # again on later runs, and `= summary.verified` threw away everything the
+    # earlier passes had confirmed -- so a batch that was steadily being
+    # confirmed kept reporting a handful, which is what made 5,000-item runs
+    # look permanently stuck.
+    session.flush()
+    batch.verified_count = int(
+        session.query(func.count(PushItem.id))
+        .filter(PushItem.batch_id == batch.id, PushItem.result == ItemResult.VERIFIED)
+        .scalar()
+        or 0
+    )
     batch.verified_at = utcnow()
-    if summary.not_applied == 0 and summary.pending_confirmation == 0 and not summary.errors:
+    still_open = int(
+        session.query(func.count(PushItem.id))
+        .filter(PushItem.batch_id == batch.id, PushItem.result == ItemResult.ACCEPTED)
+        .scalar()
+        or 0
+    )
+    if summary.not_applied == 0 and still_open == 0 and not summary.errors:
         batch.status = BatchStatus.VERIFIED
     session.flush()
 
@@ -505,3 +539,126 @@ def collect_retries(session: Session, *, limit: int = 5000, max_retries: int = 3
         .all()
     )
     return [sku for (sku,) in rows]
+
+
+def confirm_from_catalogue(session: Session, quantities: dict[str, int]) -> tuple[int, int]:
+    """
+    Settle outstanding sent items using a freshly downloaded catalogue.
+
+    Returns ``(confirmed, gave_up)``.
+
+    WHY THIS EXISTS
+    ===============
+    :func:`verify_batch` reads SKUs back one at a time, which is fine for a
+    small batch and hopeless for a large one: 5,000 GETs at our self-imposed
+    2/second is over forty minutes. So batches above
+    :data:`VERIFY_SAMPLE_THRESHOLD` verify only a sample, and the docstring
+    promised the rest would be "settled by the daily catalogue refresh".
+
+    **That fallback was never built.** Nothing in the refresh path ever touched
+    ``push_items``, so every unsampled item stayed ACCEPTED for ever. A 5,000
+    item run would report a handful confirmed and never move, while the
+    quantities on Amazon had in fact been correct all along. Pressing "Refresh
+    catalogue" looked like it did nothing, because for these rows it did.
+
+    WHY IT IS FREE
+    ==============
+    The catalogue refresh already downloads every listing's quantity in one
+    report. Confirming from that dictionary costs **no additional Amazon
+    requests at all** -- the data is already in memory. Reading 5,000 SKUs back
+    individually to learn the same thing would be pure waste.
+
+    WHAT IT WILL NOT DO
+    ===================
+    A SKU missing from the report is left alone rather than failed. The report
+    covers in-scope listings; absence is not evidence, and calling it a failure
+    is how a system teaches its operator to ignore alarms.
+    """
+    if not quantities:
+        return (0, 0)
+
+    open_items: list[PushItem] = list(
+        session.query(PushItem)
+        .join(PushBatch, PushBatch.id == PushItem.batch_id)
+        .filter(
+            PushItem.result == ItemResult.ACCEPTED,
+            PushBatch.status.in_(
+                [BatchStatus.SENT, BatchStatus.VERIFIED, BatchStatus.PARTIALLY_FAILED]
+            ),
+        )
+        .all()
+    )
+    if not open_items:
+        return (0, 0)
+
+    confirmed = 0
+    gave_up = 0
+    touched: set[int] = set()
+    now = utcnow()
+
+    for item in open_items:
+        actual = quantities.get(item.seller_sku)
+        if actual is None:
+            continue
+
+        item.verified_quantity = actual
+        item.verified_at = now
+        touched.add(item.batch_id)
+
+        if actual == item.new_quantity:
+            item.result = ItemResult.VERIFIED
+            confirmed += 1
+            listing = session.get(AmazonListing, item.seller_sku)
+            if listing is not None:
+                listing.quantity = actual
+                listing.synced_at = now
+        else:
+            batch = session.get(PushBatch, item.batch_id)
+            sent = (batch.sent_at or batch.created_at) if batch is not None else None
+            if sent is not None and now - sent >= VERIFY_CONFIRM_DEADLINE:
+                item.result = ItemResult.NOT_APPLIED
+                item.amazon_message = (
+                    f"Sent {item.new_quantity} but the catalogue still shows {actual}, "
+                    "long after Amazon accepted the change. Recorded for retry."
+                )
+                gave_up += 1
+            else:
+                item.amazon_message = (
+                    f"Sent {item.new_quantity}; the catalogue showed {actual}. "
+                    "Amazon has not applied it yet, so this is not a failure."
+                )
+
+    session.flush()
+
+    for batch_id in touched:
+        batch = session.get(PushBatch, batch_id)
+        if batch is None:
+            continue
+        batch.verified_count = int(
+            session.query(func.count(PushItem.id))
+            .filter(PushItem.batch_id == batch_id, PushItem.result == ItemResult.VERIFIED)
+            .scalar()
+            or 0
+        )
+        batch.verified_at = now
+        still_open = int(
+            session.query(func.count(PushItem.id))
+            .filter(PushItem.batch_id == batch_id, PushItem.result == ItemResult.ACCEPTED)
+            .scalar()
+            or 0
+        )
+        failed = int(
+            session.query(func.count(PushItem.id))
+            .filter(PushItem.batch_id == batch_id, PushItem.result == ItemResult.NOT_APPLIED)
+            .scalar()
+            or 0
+        )
+        if still_open == 0 and failed == 0 and batch.status is BatchStatus.SENT:
+            batch.status = BatchStatus.VERIFIED
+
+    session.flush()
+    log.info(
+        "catalogue confirmation: %d item(s) confirmed, %d gave up, across %d batch(es)",
+        confirmed, gave_up, len(touched),
+    )
+    return (confirmed, gave_up)
