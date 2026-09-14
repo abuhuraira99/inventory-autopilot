@@ -9,20 +9,20 @@
 # -----------------------------------------------------------------------------
 
 # --- Web framework -----------------------------------------------------------
-fastapi==0.118.0
-uvicorn[standard]==0.37.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
 # Jinja2 renders the dashboard server-side. No JavaScript build step anywhere in
 # this project: a build step is one more thing that can break a deploy at 3am,
 # and the dashboard is not complex enough to need one.
 jinja2==3.1.6
 # Required by FastAPI to parse HTML form posts (the settings page).
-python-multipart==0.0.20
+python-multipart==0.0.32
 # Signs session cookies.
 itsdangerous==2.2.0
 
 # --- Configuration and validation --------------------------------------------
-pydantic==2.12.0
-pydantic-settings==2.11.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
 email-validator==2.3.0
 # Pinned EXPLICITLY even though pydantic-settings already pulls it in.
 # migrations/env.py imports it directly to load .env, and a transitive
@@ -32,12 +32,12 @@ email-validator==2.3.0
 python-dotenv==1.2.3
 
 # --- Database ----------------------------------------------------------------
-SQLAlchemy==2.0.44
+SQLAlchemy==2.0.52
 # psycopg 3 with the binary wheel, so no compiler is needed in the container.
-psycopg[binary]==3.2.10
+psycopg[binary]==3.3.5
 # Schema migrations. Used rather than "create_all" so that upgrading a live
 # deployment is a reviewed, reversible, ordered operation.
-alembic==1.16.5
+alembic==1.19.2
 
 # --- HTTP client for the Amazon Selling Partner API --------------------------
 # httpx is used for its connection pooling, HTTP/2 support and timeouts that
@@ -62,29 +62,29 @@ httpx[http2]==0.28.1
 # certificate somewhere stops verifying.
 certifi==2026.7.22
 # Retry with exponential backoff and jitter, for Amazon's 429 responses.
-tenacity==9.1.2
+tenacity==9.1.4
 
 # --- Scheduling --------------------------------------------------------------
 # In-process scheduler. Chosen over Celery because this workload is one job at
 # a time on one machine; a broker plus worker plus beat would be three more
 # moving parts for no benefit. Concurrency is prevented by a PostgreSQL
 # advisory lock, not by the scheduler - see app/db.py.
-APScheduler==3.11.0
+APScheduler==3.11.3
 
 # --- Security ----------------------------------------------------------------
 # AES-256-GCM for stored secrets.
-cryptography==46.0.2
+cryptography==50.0.1
 # Argon2id password hashing. Preferred over bcrypt: memory-hard, and the
 # current recommendation for new systems.
 argon2-cffi==25.1.0
 # TOTP two-factor codes (Google Authenticator, Authy, 1Password).
-pyotp==2.9.0
+pyotp==2.10.0
 
 # --- File transfer -----------------------------------------------------------
 # FTPS (explicit TLS on port 21) comes from the standard library's ftplib.
 # paramiko is here only so that switching the vendor to SFTP later is a
 # settings change rather than a code change.
-paramiko==4.0.0
+paramiko==5.0.0
 
 # --- Reports -----------------------------------------------------------------
 # XlsxWriter in constant-memory mode. Used INSTEAD of CSV for the five reports
@@ -98,4 +98,4 @@ XlsxWriter==3.2.9
 # zoneinfo is in the standard library, but Windows and slim Linux images have
 # no system tz database. This provides one so America/New_York resolves
 # everywhere.
-tzdata==2025.2
+tzdata==2026.3
